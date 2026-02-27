@@ -1,0 +1,111 @@
+# Example Home Assistant Automations for Zebra Label Printer
+#
+# Copy the automations you want into your HA automations.yaml or
+# create them via the HA UI (Settings → Automations & Scenes → Create).
+
+# ──────────────────────────────────────────────────────────────────
+# 1. PHONE SHARE → PRINT
+#
+# When a user shares a PDF from the HA Companion App on their phone,
+# this automation sends it to the label printer.
+#
+# Setup:
+#   - Install the HA Companion App on your phone
+#   - Share a shipping label PDF from any app (email, browser, etc.)
+#   - Select "Home Assistant" as the share target
+#   - The label prints automatically
+# ──────────────────────────────────────────────────────────────────
+
+- alias: "Print shared shipping label"
+  description: "Prints a label when shared from the Companion App"
+  triggers:
+    - trigger: event
+      event_type: mobile_app_notification_action
+      event_data:
+        action: PRINT_LABEL
+  actions:
+    - action: rest_command.zebra_print_label
+      data:
+        file_path: "{{ trigger.event.data.file }}"
+
+# Add this to your configuration.yaml for the above automation:
+#
+# rest_command:
+#   zebra_print_label:
+#     url: "http://localhost:8099/api/labels/webhook"
+#     method: POST
+#     content_type: "application/json"
+#     payload: '{"file_path": "{{ file_path }}", "printer": "{{ printer | default }}"}'
+
+# ──────────────────────────────────────────────────────────────────
+# 2. FOLDER WATCHER → AUTO-PRINT
+#
+# Watches a folder for new PDF files and auto-prints them.
+# Great with a network share — users just drop files in a folder.
+#
+# Setup:
+#   1. Add to configuration.yaml:
+#
+#      homeassistant:
+#        allowlist_external_dirs:
+#          - "/share/shipping_labels"
+#
+#      folder_watcher:
+#        - folder: "/share/shipping_labels"
+#          patterns:
+#            - "*.pdf"
+#            - "*.png"
+#            - "*.jpg"
+#
+#      rest_command:
+#        zebra_print_label:
+#          url: "http://localhost:8099/api/labels/webhook"
+#          method: POST
+#          content_type: "application/json"
+#          payload: '{"file_path": "{{ file_path }}"}'
+#
+#   2. Mount a network share to /share/shipping_labels (via Samba addon)
+#   3. Restart HA
+# ──────────────────────────────────────────────────────────────────
+
+- alias: "Auto-print shipping labels from watched folder"
+  description: "Prints labels automatically when dropped into the shipping_labels folder"
+  triggers:
+    - trigger: event
+      event_type: folder_watcher
+      event_data:
+        event_type: created
+  conditions:
+    - condition: template
+      value_template: >
+        {{ trigger.event.data.path.endswith('.pdf')
+           or trigger.event.data.path.endswith('.png')
+           or trigger.event.data.path.endswith('.jpg') }}
+  actions:
+    - action: rest_command.zebra_print_label
+      data:
+        file_path: "{{ trigger.event.data.path }}"
+    # Optional: send a notification when the label is printed
+    - action: notify.notify
+      data:
+        title: "Label Printed"
+        message: "Printed shipping label: {{ trigger.event.data.path | basename }}"
+
+# ──────────────────────────────────────────────────────────────────
+# 3. DASHBOARD BUTTON → OPEN LABEL PRINTER
+#
+# Not an automation — just a Lovelace card config.
+# Add this to your dashboard YAML:
+#
+#   type: button
+#   name: Print Label
+#   icon: mdi:printer
+#   tap_action:
+#     action: navigate
+#     navigation_path: /hassio/ingress/zebra-label-printer
+#
+# Or use the addon-iframe card (install from HACS):
+#
+#   type: custom:addon-iframe
+#   addon: zebra-label-printer
+# ──────────────────────────────────────────────────────────────────

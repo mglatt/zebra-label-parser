@@ -11,10 +11,77 @@ Print shipping labels from any PDF or image to a Zebra thermal printer.
 
 ## Usage
 
-1. Open the addon from the sidebar (Label Printer)
+### From the sidebar (simplest)
+
+1. Open **Label Printer** from the HA sidebar
 2. Select your printer from the dropdown
 3. Drag and drop a shipping label PDF or image
 4. The label is automatically extracted, converted, and printed
+
+### From your phone
+
+1. Open the HA Companion App
+2. Tap **Label Printer** in the sidebar
+3. Tap the drop zone to open the file picker
+4. Select a shipping label PDF from your Downloads, email, or files
+5. The label prints automatically
+
+### Auto-print from a shared folder
+
+Set up a watched folder so anyone in the household can print by simply dropping a file:
+
+1. Mount a network share to `/share/shipping_labels` (e.g., via the Samba addon)
+2. Add the Folder Watcher integration to your `configuration.yaml`
+3. Create an automation that calls the label printer webhook (see `automations.yaml` for examples)
+4. Now anyone can drag a PDF into the shared folder and it auto-prints
+
+### From a dashboard
+
+Add a button to any Lovelace dashboard:
+
+```yaml
+type: button
+name: Print Label
+icon: mdi:printer
+tap_action:
+  action: navigate
+  navigation_path: /hassio/ingress/zebra-label-printer
+```
+
+Or embed the full UI with the `addon-iframe` card (install from HACS):
+
+```yaml
+type: custom:addon-iframe
+addon: zebra-label-printer
+```
+
+## API
+
+The addon exposes these endpoints for automations:
+
+- `POST /api/labels/print` — Upload a file (multipart form)
+- `POST /api/labels/webhook` — Print from file path or base64 data (JSON body)
+- `GET /api/printers` — List available printers
+- `GET /api/health` — Health check
+
+### Webhook payload
+
+```json
+{
+  "file_path": "/share/shipping_labels/label.pdf",
+  "printer": "Zebra_ZD420"
+}
+```
+
+Or with base64 data:
+
+```json
+{
+  "file_base64": "JVBERi0xLjQ...",
+  "filename": "label.pdf",
+  "printer": "Zebra_ZD420"
+}
+```
 
 ## How It Works
 
