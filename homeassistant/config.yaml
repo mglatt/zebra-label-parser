@@ -1,0 +1,28 @@
+name: Zebra Label Printer
+description: Print shipping labels to a Zebra thermal printer
+version: "0.1.0"
+slug: zebra-label-printer
+url: "https://github.com/mglatt/zebra-label-parser"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:printer
+panel_title: Label Printer
+options:
+  anthropic_api_key: ""
+  printer_name: ""
+  claude_model: "claude-sonnet-4-20250514"
+schema:
+  anthropic_api_key: str?
+  printer_name: str?
+  claude_model: str?
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: Web UI
+map:
+  - share:rw

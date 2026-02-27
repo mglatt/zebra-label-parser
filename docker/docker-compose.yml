@@ -1,0 +1,15 @@
+services:
+  zebra-label-parser:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8099:8099"
+    environment:
+      - ZLP_ANTHROPIC_API_KEY=${ZLP_ANTHROPIC_API_KEY:-}
+      - ZLP_PRINTER_NAME=${ZLP_PRINTER_NAME:-}
+      - ZLP_CUPS_SERVER=${ZLP_CUPS_SERVER:-}
+    volumes:
+      # Share host CUPS socket if available (alternative to running CUPS in container)
+      - /var/run/cups:/var/run/cups:ro
+    restart: unless-stopped

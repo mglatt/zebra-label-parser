@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zebra Label Printer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Shipping Label Printer</h1>
+
+    <!-- Printer selector -->
+    <div class="printer-bar">
+      <label for="printer-select">Printer:</label>
+      <select id="printer-select">
+        <option value="">Loading printers...</option>
+      </select>
+      <button id="refresh-btn" title="Refresh printer list">&circlearrowright;</button>
+    </div>
+
+    <!-- State: idle / drop zone -->
+    <div id="state-idle" class="state active">
+      <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload a shipping label">
+        <div class="drop-icon">&#128230;</div>
+        <p class="drop-text">Drop a shipping label here</p>
+        <p class="drop-sub">PDF, PNG, JPG &mdash; or click to browse</p>
+        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.bmp,.tiff,.tif,.gif,.webp" hidden>
+      </div>
+    </div>
+
+    <!-- State: processing -->
+    <div id="state-processing" class="state">
+      <div class="spinner"></div>
+      <p class="processing-text">Processing label...</p>
+      <ul id="stages" class="stages"></ul>
+    </div>
+
+    <!-- State: done -->
+    <div id="state-done" class="state">
+      <div id="result-icon" class="result-icon"></div>
+      <p id="result-text" class="result-text"></p>
+      <ul id="done-stages" class="stages"></ul>
+      <button id="again-btn" class="btn">Print Another</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

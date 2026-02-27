@@ -1,0 +1,15 @@
+configuration:
+  anthropic_api_key:
+    name: Anthropic API Key
+    description: >-
+      API key for Claude Vision label extraction. Optional — without it,
+      the full page will be printed as-is (works fine for clean label PDFs).
+  printer_name:
+    name: Printer Name
+    description: >-
+      Name of the Zebra printer as configured in CUPS (e.g., "Zebra_ZD420").
+      Leave blank to select from the UI each time.
+  claude_model:
+    name: Claude Model
+    description: >-
+      Claude model to use for label extraction. Default is claude-sonnet-4-20250514.
