@@ -1,0 +1,5 @@
+translations/
+DOCS.md
+automations.yaml
+config.yaml
+.dockerignore

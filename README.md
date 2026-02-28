@@ -16,9 +16,10 @@ A service that ingests shipping label PDFs or images, extracts the label using C
 ### Local Development
 
 ```bash
-cp .env.example .env
+cp .env.example zebra-label-printer/.env
 # Edit .env with your settings
 
+cd zebra-label-printer
 pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 8099
 ```
@@ -28,9 +29,8 @@ Open http://localhost:8099 in your browser.
 ### Docker
 
 ```bash
-cd docker
-cp ../.env.example ../.env
-# Edit ../.env with your settings
+cp .env.example .env
+# Edit .env with your settings
 
 docker compose up --build
 ```
@@ -38,7 +38,7 @@ docker compose up --build
 ### Docker (standalone)
 
 ```bash
-docker build -f docker/Dockerfile -t zebra-label-parser .
+docker build -t zebra-label-parser zebra-label-printer/
 docker run -p 8099:8099 \
   -e ZLP_ANTHROPIC_API_KEY=your-key \
   -e ZLP_PRINTER_NAME=Zebra_ZD420 \
@@ -48,7 +48,10 @@ docker run -p 8099:8099 \
 
 ### Home Assistant Addon
 
-Copy the `homeassistant/` directory to your HA addons folder, then install via the HA Supervisor UI.
+1. In Home Assistant, go to **Settings → Add-ons → Add-on Store**
+2. Click **⋮** (three dots menu) → **Repositories**
+3. Add: `https://github.com/mglatt/zebra-label-parser`
+4. Find **Zebra Label Printer** in the store and click **Install**
 
 ## How It Works
 
@@ -92,6 +95,8 @@ lpadmin -p Zebra_ZD420 -v usb://Zebra/ZD420 -m raw -E
 ## Tests
 
 ```bash
+cd zebra-label-printer
 pip install -e ".[dev]"
+cd ..
 pytest
 ```
