@@ -1,8 +1,8 @@
 services:
   zebra-label-parser:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: ./zebra-label-printer
+      dockerfile: Dockerfile
     ports:
       - "8099:8099"
     environment:

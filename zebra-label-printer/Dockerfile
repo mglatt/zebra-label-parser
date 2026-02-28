@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir ".[cups]"
 
 # Copy application code
 COPY app/ ./app/
-COPY docker/entrypoint.sh ./entrypoint.sh
-COPY docker/cupsd.conf /etc/cups/cupsd.conf
+COPY entrypoint.sh ./entrypoint.sh
+COPY cupsd.conf /etc/cups/cupsd.conf
 
 RUN chmod +x /entrypoint.sh
 
