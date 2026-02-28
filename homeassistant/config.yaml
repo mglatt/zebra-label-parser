@@ -16,10 +16,18 @@ options:
   anthropic_api_key: ""
   printer_name: ""
   claude_model: "claude-sonnet-4-20250514"
+  cups_server: ""
+  label_width_inches: 4.0
+  label_height_inches: 6.0
+  label_dpi: 203
 schema:
   anthropic_api_key: str?
   printer_name: str?
   claude_model: str?
+  cups_server: str?
+  label_width_inches: float?
+  label_height_inches: float?
+  label_dpi: int?
 ports:
   8099/tcp: null
 ports_description:

@@ -53,6 +53,14 @@ class Settings(BaseSettings):
             self.printer_name = ha["printer_name"]
         if ha.get("claude_model"):
             self.claude_model = ha["claude_model"]
+        if ha.get("cups_server") and not self.cups_server:
+            self.cups_server = ha["cups_server"]
+        if ha.get("label_width_inches"):
+            self.label_width_inches = float(ha["label_width_inches"])
+        if ha.get("label_height_inches"):
+            self.label_height_inches = float(ha["label_height_inches"])
+        if ha.get("label_dpi"):
+            self.label_dpi = int(ha["label_dpi"])
 
 
 def get_settings() -> Settings:
