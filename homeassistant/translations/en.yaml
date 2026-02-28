@@ -13,3 +13,22 @@ configuration:
     name: Claude Model
     description: >-
       Claude model to use for label extraction. Default is claude-sonnet-4-20250514.
+  cups_server:
+    name: CUPS Server
+    description: >-
+      Hostname or IP address of an external CUPS print server
+      (e.g., "192.168.1.100" or "cups.local"). Leave blank to use
+      the built-in CUPS daemon running inside the addon container.
+  label_width_inches:
+    name: Label Width (inches)
+    description: >-
+      Width of the shipping label in inches. Default is 4.0 (standard 4x6 thermal label).
+  label_height_inches:
+    name: Label Height (inches)
+    description: >-
+      Height of the shipping label in inches. Default is 6.0 (standard 4x6 thermal label).
+  label_dpi:
+    name: Label DPI
+    description: >-
+      Print resolution in dots per inch. Common values: 203 (standard), 300 (high-res).
+      Must match your Zebra printer's DPI setting.
