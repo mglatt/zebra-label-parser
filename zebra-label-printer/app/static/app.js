@@ -3,6 +3,9 @@
 
   // Derive base path for API calls — works both standalone and behind HA ingress.
   const BASE = window.location.pathname.replace(/\/$/, "");
+  console.log("[ZLP] page URL:", window.location.href);
+  console.log("[ZLP] pathname:", window.location.pathname);
+  console.log("[ZLP] BASE:", BASE);
 
   // Elements
   const stateIdle = document.getElementById("state-idle");
@@ -28,9 +31,13 @@
 
   // Printer list
   async function loadPrinters() {
+    const url = BASE + "/api/printers";
+    console.log("[ZLP] fetching printers from:", url);
     try {
-      const res = await fetch(BASE + "/api/printers");
+      const res = await fetch(url);
+      console.log("[ZLP] printers response status:", res.status);
       const data = await res.json();
+      console.log("[ZLP] printers data:", JSON.stringify(data));
       printerSelect.innerHTML = "";
 
       if (data.printers.length === 0) {
@@ -45,7 +52,8 @@
         if (p.name === data.default) opt.selected = true;
         printerSelect.appendChild(opt);
       });
-    } catch {
+    } catch (err) {
+      console.error("[ZLP] loadPrinters failed:", err);
       printerSelect.innerHTML = '<option value="">Failed to load printers</option>';
     }
   }
