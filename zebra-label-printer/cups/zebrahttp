@@ -58,23 +58,37 @@ FILENAME="${TITLE:-label}.pdf"
 
 echo "INFO: zebrahttp: Sending job $JOB_ID \"$TITLE\" to $URL_PATH (printer=$PRINTER)" >&2
 
-# Build curl args
-CURL_ARGS=(-s -o /dev/stderr -w "%{http_code}" --connect-timeout 10 --max-time 60)
+# Build curl args (-sS: silent but show errors)
+CURL_ARGS=(-sS -w "%{http_code}" --connect-timeout 10 --max-time 60)
 CURL_ARGS+=(-X POST)
 CURL_ARGS+=(-F "file=@${INPUT};filename=${FILENAME}")
 if [ -n "$PRINTER" ]; then
     CURL_ARGS+=(-F "printer=${PRINTER}")
 fi
 
-HTTP_CODE=$(curl "${CURL_ARGS[@]}" "$URL_PATH" 2>/dev/null)
+# Capture HTTP status code on stdout (-w); curl errors (-S) go to CURL_LOG via stderr redirect;
+# response body is discarded (we only need the status code for success/failure).
+CURL_LOG=$(mktemp /tmp/cups-zebrahttp-log-XXXXXX)
+HTTP_CODE=$(curl "${CURL_ARGS[@]}" -o /dev/null "$URL_PATH" 2>"$CURL_LOG")
+CURL_EXIT=$?
 
 # Clean up temp file
 [ -n "$TMPFILE" ] && rm -f "$TMPFILE"
 
-if [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 300 ] 2>/dev/null; then
+if [ "$CURL_EXIT" -ne 0 ]; then
+    # curl itself failed (connection refused, DNS error, timeout, etc.)
+    echo "ERROR: zebrahttp: Job $JOB_ID — curl exit $CURL_EXIT connecting to $URL_PATH" >&2
+    # Show curl's error output in CUPS log for diagnosis
+    [ -s "$CURL_LOG" ] && sed 's/^/ERROR: zebrahttp:   /' "$CURL_LOG" >&2
+    rm -f "$CURL_LOG"
+    # Exit 6 = CUPS_BACKEND_RETRY — tells CUPS to retry later instead of stopping the queue
+    exit 6
+elif [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 300 ] 2>/dev/null; then
     echo "INFO: zebrahttp: Job $JOB_ID completed (HTTP $HTTP_CODE)" >&2
+    rm -f "$CURL_LOG"
     exit 0
 else
-    echo "ERROR: zebrahttp: Job $JOB_ID failed (HTTP ${HTTP_CODE:-timeout})" >&2
+    echo "ERROR: zebrahttp: Job $JOB_ID failed (HTTP ${HTTP_CODE:-unknown})" >&2
+    rm -f "$CURL_LOG"
     exit 1
 fi
