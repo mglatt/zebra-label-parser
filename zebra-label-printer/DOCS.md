@@ -33,7 +33,8 @@ There are two ways to print from your phone:
 **Option B: Share from any app via iOS Shortcut (recommended)**
 
 Set up a one-time iOS Shortcut so you can print labels directly from the
-share sheet in Mail, Safari, Files, or any app:
+share sheet in Mail, Safari, Files, or any app. The Shortcut sends the file
+straight to the addon's API — no HA automation or `rest_command` needed.
 
 1. Open the **Shortcuts** app on your iPhone
 2. Create a new shortcut named **"Print Label"**
@@ -41,20 +42,18 @@ share sheet in Mail, Safari, Files, or any app:
 4. Set the share sheet to accept **PDFs** and **Images**
 5. Add these actions in order:
    - **Base64 Encode** — input: *Shortcut Input*
-   - **URL** — enter: `https://<your-ha-url>/api/webhook/zebra_print_label`
+   - **URL** — enter: `http://<your-ha-ip>:8099/api/labels/webhook`
    - **Get Contents of URL** — Method: **POST**, Headers: `Content-Type: application/json`, Body (JSON):
      | Key | Value |
      |-----|-------|
      | `file_base64` | *(Base64 Encoded variable)* |
      | `filename` | *(Shortcut Input → Name)* |
 6. Save the shortcut
-7. Copy the webhook automation from `automations.yaml` (example #1) and add
-   the `rest_command` to your `configuration.yaml`
 
 **Usage:** From any app, tap **Share** → **Print Label** and the label prints.
 
-> **Tip:** Use your Nabu Casa URL (e.g., `https://xxxx.ui.nabu.casa`) so it
-> works from anywhere, not just your home Wi-Fi.
+> **Note:** This works when your phone is on the same network as Home
+> Assistant. For remote printing, use a VPN such as Tailscale or WireGuard.
 
 ### Auto-print from a shared folder
 

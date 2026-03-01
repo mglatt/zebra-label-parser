@@ -4,11 +4,16 @@
 # create them via the HA UI (Settings → Automations & Scenes → Create).
 
 # ──────────────────────────────────────────────────────────────────
-# 1. PHONE SHARE → PRINT (via iOS Shortcut + HA Webhook)
+# 1. PHONE SHARE → PRINT (via iOS Shortcut)
 #
 # Print a shipping label by sharing a PDF or image from your iPhone.
-# Uses an iOS Shortcut to base64-encode the file and POST it to a
-# Home Assistant webhook, which triggers this automation.
+# The Shortcut sends the file directly to the addon's API — no Home
+# Assistant automation or rest_command is needed.
+#
+# Why direct? Routing base64 file data through HA's automation system
+# hits the 32KB event-data limit and the addon isn't reachable at
+# localhost from HA Core (they run in separate containers). Posting
+# straight to the addon avoids both issues.
 #
 # Setup — create a Shortcut on your iPhone (one-time):
 #   1. Open the Shortcuts app
@@ -16,10 +21,8 @@
 #   3. Tap the (i) button at the bottom → enable "Show in Share Sheet"
 #   4. Tap "Share Sheet Input" → select "PDFs" and "Images"
 #   5. Add action: "Base64 Encode" (input: Shortcut Input)
-#   6. Add action: "URL" → enter your HA webhook URL:
-#        https://<your-ha-url>/api/webhook/zebra_print_label
-#      (Use your Nabu Casa URL, e.g. https://xxxx.ui.nabu.casa,
-#       or local: http://homeassistant.local:8123)
+#   6. Add action: "URL" → enter your addon URL:
+#        http://<your-ha-ip>:8099/api/labels/webhook
 #   7. Add action: "Get Contents of URL"
 #        - Method: POST
 #        - Headers: Content-Type = application/json
@@ -33,33 +36,9 @@
 #   - Select "Print Label" from the share sheet
 #   - The label prints automatically
 #
-# Security note:
-#   The webhook_id acts as a bearer token — anyone who knows the URL
-#   can trigger a print. For better security, replace "zebra_print_label"
-#   with a random string (e.g., "zebra_abc123xyz789") in both this
-#   automation and the Shortcut URL.
+# Note: This works when your phone is on the same network as HA.
+# For remote printing, use a VPN (e.g., Tailscale or WireGuard).
 # ──────────────────────────────────────────────────────────────────
-
-- alias: "Print label shared from phone"
-  description: "Prints a label when shared via iOS Shortcut to the HA webhook"
-  triggers:
-    - trigger: webhook
-      webhook_id: zebra_print_label
-      local_only: false
-  actions:
-    - action: rest_command.zebra_print_label_base64
-      data:
-        file_base64: "{{ trigger.json.file_base64 }}"
-        filename: "{{ trigger.json.filename | default('shared-label.pdf') }}"
-
-# Add this to your configuration.yaml for the above automation:
-#
-# rest_command:
-#   zebra_print_label_base64:
-#     url: "http://localhost:8099/api/labels/webhook"
-#     method: POST
-#     content_type: "application/json"
-#     payload: '{"file_base64": "{{ file_base64 }}", "filename": "{{ filename }}"}'
 
 # ──────────────────────────────────────────────────────────────────
 # 2. FOLDER WATCHER → AUTO-PRINT
