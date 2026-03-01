@@ -21,6 +21,8 @@
   const resultText = document.getElementById("result-text");
   const doneStages = document.getElementById("done-stages");
   const againBtn = document.getElementById("again-btn");
+  const previewContainer = document.getElementById("preview-container");
+  const previewImage = document.getElementById("preview-image");
 
   // State management
   function showState(state) {
@@ -127,16 +129,29 @@
         return;
       }
 
-      showResult(data.success, data.success ? "Label sent to printer!" : (data.error || "Print failed"), data.stages || []);
+      showResult(
+        data.success,
+        data.success ? "Label sent to printer!" : (data.error || "Print failed"),
+        data.stages || [],
+        data.preview_base64 || null,
+      );
     } catch (err) {
       showResult(false, `Network error: ${err.message}`, []);
     }
   }
 
-  function showResult(success, message, stages) {
+  function showResult(success, message, stages, previewBase64) {
     resultIcon.textContent = success ? "\u2705" : "\u274C";
     resultText.textContent = message;
     resultText.className = "result-text " + (success ? "success" : "error");
+
+    if (previewBase64) {
+      previewImage.src = "data:image/png;base64," + previewBase64;
+      previewContainer.style.display = "";
+    } else {
+      previewContainer.style.display = "none";
+    }
+
     renderStages(stages, doneStages);
     showState(stateDone);
   }

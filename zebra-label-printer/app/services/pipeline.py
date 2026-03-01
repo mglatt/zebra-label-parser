@@ -1,6 +1,7 @@
 """Orchestrate the full label processing pipeline."""
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import time
@@ -139,6 +140,11 @@ async def process_and_print(
         )
         stage("process", f"{label.width}x{label.height} mono @ {scale_pct}%")
 
+        # Encode preview PNG for the frontend
+        buf = io.BytesIO()
+        label.save(buf, format="PNG")
+        preview_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
         # 4. Generate ZPL (ASCII hex for maximum printer compatibility)
         zpl = image_to_zpl_ascii(label)
         stage("zpl", f"{len(zpl)} bytes (ascii)")
@@ -154,6 +160,7 @@ async def process_and_print(
             "success": result["success"],
             "stages": stages,
             "print_result": result,
+            "preview_base64": preview_b64,
             "total_time_s": round(time.monotonic() - t0, 2),
         }
 
