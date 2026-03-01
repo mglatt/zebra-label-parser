@@ -12,7 +12,7 @@ from app.services.image_processor import prepare_label_image
 from app.services.label_extractor import extract_label_region
 from app.services.pdf_renderer import render_pdf_page
 from app.services.print_service import print_zpl
-from app.services.zpl_generator import image_to_zpl
+from app.services.zpl_generator import image_to_zpl_ascii
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +85,9 @@ async def process_and_print(
         )
         stage("process", f"{label.width}x{label.height} mono")
 
-        # 4. Generate ZPL
-        zpl = image_to_zpl(label)
-        stage("zpl", f"{len(zpl)} bytes")
+        # 4. Generate ZPL (ASCII hex for maximum printer compatibility)
+        zpl = image_to_zpl_ascii(label)
+        stage("zpl", f"{len(zpl)} bytes (ascii)")
 
         # 5. Print
         result = print_zpl(zpl, printer_name, cups_server=settings.cups_server)
