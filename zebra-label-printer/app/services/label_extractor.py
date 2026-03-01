@@ -12,29 +12,20 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _EXTRACTION_PROMPT = """\
-Analyze this image and locate the shipping label. The shipping label is the \
-rectangular region containing the delivery address, return address, barcodes, \
-and carrier information (e.g., UPS, FedEx, USPS, DHL).
+You are a shipping label detector. Your ONLY job is to return a JSON bounding \
+box for the shipping label in this image.
 
-If the image contains only a shipping label with no surrounding content, \
-return the full image dimensions.
+Rules:
+1. A shipping label contains: delivery address, return address, barcodes, and \
+carrier branding (UPS, FedEx, USPS, DHL, etc.).
+2. If the ENTIRE image is a shipping label (no surrounding content like \
+instructions or packing slips), return: {"found": false}
+3. If the image contains a shipping label embedded within other content, return \
+the bounding box as percentages of image dimensions (0-100):
 
-If the image contains a shipping label embedded within other content \
-(instructions, packing slips, etc.), return the bounding box of just the \
-shipping label.
+{"found": true, "x1_pct": <left>, "y1_pct": <top>, "x2_pct": <right>, "y2_pct": <bottom>}
 
-Return ONLY a JSON object with these exact keys:
-{
-  "found": true,
-  "x1": <left edge in pixels>,
-  "y1": <top edge in pixels>,
-  "x2": <right edge in pixels>,
-  "y2": <bottom edge in pixels>
-}
-
-If no shipping label is found, return:
-{"found": false}
-"""
+Return ONLY valid JSON, no other text."""
 
 
 def _image_to_base64(image: Image.Image) -> str:
@@ -43,9 +34,12 @@ def _image_to_base64(image: Image.Image) -> str:
     return base64.standard_b64encode(buf.getvalue()).decode("ascii")
 
 
-def _parse_bbox(text: str) -> Optional[dict]:
-    """Extract JSON bounding box from Claude's response."""
-    # Find the JSON object in the response
+def _parse_bbox(text: str, width: int, height: int) -> Optional[dict]:
+    """Extract JSON bounding box from Claude's response.
+
+    Handles both percentage-based keys (x1_pct) and legacy pixel keys (x1).
+    Returns pixel coordinates snapped to a 10px grid for consistency.
+    """
     start = text.find("{")
     end = text.rfind("}") + 1
     if start == -1 or end == 0:
@@ -54,11 +48,30 @@ def _parse_bbox(text: str) -> Optional[dict]:
         data = json.loads(text[start:end])
         if not data.get("found", False):
             return None
+
+        # Convert percentage coords to pixels
+        if "x1_pct" in data:
+            data = {
+                "found": True,
+                "x1": data["x1_pct"] / 100.0 * width,
+                "y1": data["y1_pct"] / 100.0 * height,
+                "x2": data["x2_pct"] / 100.0 * width,
+                "y2": data["y2_pct"] / 100.0 * height,
+            }
+
         for key in ("x1", "y1", "x2", "y2"):
             if key not in data:
                 return None
+
+        # Snap to 10px grid to reduce run-to-run jitter
+        _GRID = 10
+        data["x1"] = int(data["x1"] // _GRID * _GRID)
+        data["y1"] = int(data["y1"] // _GRID * _GRID)
+        data["x2"] = int(-(-data["x2"] // _GRID) * _GRID)  # ceil to grid
+        data["y2"] = int(-(-data["y2"] // _GRID) * _GRID)
+
         return data
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, KeyError):
         return None
 
 
@@ -106,7 +119,8 @@ async def extract_label_region(
 
         response = await client.messages.create(
             model=model,
-            max_tokens=256,
+            max_tokens=128,
+            temperature=0,
             messages=[
                 {
                     "role": "user",
@@ -124,12 +138,17 @@ async def extract_label_region(
                             "text": _EXTRACTION_PROMPT,
                         },
                     ],
-                }
+                },
+                # Prefill forces the model to emit JSON immediately
+                {
+                    "role": "assistant",
+                    "content": "{",
+                },
             ],
         )
 
-        reply = response.content[0].text
-        bbox = _parse_bbox(reply)
+        reply = "{" + response.content[0].text
+        bbox = _parse_bbox(reply, image.width, image.height)
 
         if bbox is None:
             logger.info("No label region detected, using full image")
