@@ -67,8 +67,22 @@ else
     INPUT="$TMPFILE"
 fi
 
-# Derive a filename from the job title
-FILENAME="${TITLE:-label}.pdf"
+# Derive a filename from the job title — preserve original extension if present,
+# otherwise default to .pdf.  Using .zpl when the input looks like ZPL prevents
+# the API from misdetecting it as a PDF.
+FILENAME="${TITLE:-label}"
+case "$FILENAME" in
+    *.*) ;; # already has extension
+    *)
+        # Peek at the first bytes of the input to detect ZPL
+        HEAD=$(head -c 16 "$INPUT" 2>/dev/null || true)
+        if echo "$HEAD" | grep -qiE '^\^XA|^\^FO|^\^CT'; then
+            FILENAME="${FILENAME}.zpl"
+        else
+            FILENAME="${FILENAME}.pdf"
+        fi
+        ;;
+esac
 
 echo "INFO: zebrahttp: Sending job $JOB_ID \"$TITLE\" to $URL_PATH (printer=$PRINTER${API_KEY:+, auth=yes})" >&2
 

@@ -97,6 +97,25 @@ def _check_job_status(conn, job_id: int, printer_name: str) -> None:
         logger.exception("Failed to check job %d status", job_id)
 
 
+def _is_loopback_queue(printer_name: str) -> bool:
+    """Detect if a CUPS queue uses the zebrahttp backend (loops back to us).
+
+    Printing to such a queue from within the API would create a recursive
+    loop: API → CUPS → zebrahttp backend → API → CUPS → …
+    """
+    if not _HAS_PYCUPS:
+        return False
+    try:
+        conn = cups.Connection()
+        printers = conn.getPrinters()
+        info = printers.get(printer_name)
+        if info and info.get("device-uri", "").startswith("zebrahttp://"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def print_zpl(
     zpl: str,
     printer_name: str,
@@ -104,6 +123,16 @@ def print_zpl(
 ) -> dict:
     """Send a ZPL string to a CUPS printer as a raw job."""
     _set_cups_server(cups_server)
+
+    # Guard against printing to a virtual queue that would loop back to us
+    if _is_loopback_queue(printer_name):
+        msg = (
+            f"Printer '{printer_name}' uses the zebrahttp backend which "
+            f"loops back to this API. Set printer_name to the physical "
+            f"printer (e.g. 'Zebra_LP2844'), not the virtual CUPS queue."
+        )
+        logger.error(msg)
+        return {"success": False, "error": msg}
 
     logger.info("Printing ZPL (%d bytes) to %s via %s",
                 len(zpl), printer_name, "pycups" if _HAS_PYCUPS else "lp")
