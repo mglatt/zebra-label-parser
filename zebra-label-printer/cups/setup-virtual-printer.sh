@@ -52,7 +52,7 @@ echo "  Installed: ${BACKEND_DIR}/zebrahttp"
 
 # Step 2: Create CUPS print queue
 echo "[2/4] Creating CUPS print queue '${QUEUE_NAME}'..."
-DEVICE_URI="zebrahttp://${HASS_IP}:${API_PORT}/api/labels/print?printer=${PRINTER_NAME}"
+DEVICE_URI="zebrahttp://https://${HASS_IP}:${API_PORT}/api/labels/print?printer=${PRINTER_NAME}"
 lpadmin -p "${QUEUE_NAME}" \
     -E \
     -v "${DEVICE_URI}" \
