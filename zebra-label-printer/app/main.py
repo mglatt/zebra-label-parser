@@ -23,7 +23,7 @@ def create_app() -> FastAPI:
     logger.info("  label_dpi:    %s", settings.label_dpi)
     logger.info("  label_size:   %sx%s inches", settings.label_width_inches, settings.label_height_inches)
 
-    app = FastAPI(title="Zebra Label Parser", version="0.2.0")
+    app = FastAPI(title="Zebra Label Parser", version="0.3.0")
     app.state.settings = settings
 
     @app.middleware("http")

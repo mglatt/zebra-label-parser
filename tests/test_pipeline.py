@@ -43,7 +43,29 @@ async def test_pipeline_with_image(sample_image):
         assert result["success"] is True
         assert any(s["name"] == "load" for s in result["stages"])
         assert any(s["name"] == "zpl" for s in result["stages"])
+        assert "preview_base64" in result
         mock_print.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_preview_base64_is_valid_png(sample_image):
+    """Pipeline result includes a valid base64-encoded PNG preview."""
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    sample_image.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    settings = Settings(anthropic_api_key=None, printer_name="TestPrinter")
+
+    with patch("app.services.pipeline.print_zpl") as mock_print:
+        mock_print.return_value = {"success": True, "job_id": 1, "printer": "TestPrinter"}
+
+        result = await process_and_print(png_bytes, "test.png", settings, "TestPrinter")
+
+        raw = base64.b64decode(result["preview_base64"])
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
 
 
 @pytest.mark.asyncio
