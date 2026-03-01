@@ -1,5 +1,8 @@
 # Example Home Assistant Automations for Zebra Label Printer
 #
+# The addon uses host_network: true so it is reachable at
+# http://<your-ha-ip>:8099 from both HA Core and the local network.
+#
 # Copy the automations you want into your HA automations.yaml or
 # create them via the HA UI (Settings → Automations & Scenes → Create).
 
@@ -9,11 +12,6 @@
 # Print a shipping label by sharing a PDF or image from your iPhone.
 # The Shortcut sends the file directly to the addon's API — no Home
 # Assistant automation or rest_command is needed.
-#
-# Why direct? Routing base64 file data through HA's automation system
-# hits the 32KB event-data limit and the addon isn't reachable at
-# localhost from HA Core (they run in separate containers). Posting
-# straight to the addon avoids both issues.
 #
 # Setup — create a Shortcut on your iPhone (one-time):
 #   1. Open the Shortcuts app
