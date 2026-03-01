@@ -16,6 +16,16 @@ def app():
         return create_app()
 
 
+@pytest.fixture
+def app_with_auth():
+    with patch.dict("os.environ", {
+        "ZLP_ANTHROPIC_API_KEY": "",
+        "ZLP_PRINTER_NAME": "Test",
+        "ZLP_API_KEY": "test-secret-key",
+    }):
+        return create_app()
+
+
 @pytest.mark.asyncio
 async def test_health(app):
     with patch("app.routers.health.get_available_printers") as mock_printers:
@@ -188,3 +198,76 @@ async def test_webhook_no_printer(app):
             json={"file_base64": base64.b64encode(b"fake").decode()},
         )
         assert resp.status_code == 400
+
+
+# --- API key authentication tests ---
+
+
+@pytest.mark.asyncio
+async def test_no_auth_when_api_key_not_set(app):
+    """All requests allowed when no API key is configured."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch("app.routers.printers.get_available_printers", return_value=[]):
+            resp = await client.get("/api/printers")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_rejects_missing_key(app_with_auth):
+    """Returns 401 when API key is configured but not provided."""
+    transport = ASGITransport(app=app_with_auth)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/printers")
+        assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_auth_rejects_wrong_key(app_with_auth):
+    """Returns 401 when a wrong API key is provided."""
+    transport = ASGITransport(app=app_with_auth)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/printers", headers={"X-API-Key": "wrong-key"})
+        assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_auth_accepts_correct_header(app_with_auth):
+    """Allows request with correct X-API-Key header."""
+    transport = ASGITransport(app=app_with_auth)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch("app.routers.printers.get_available_printers", return_value=[]):
+            resp = await client.get("/api/printers", headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_accepts_query_param(app_with_auth):
+    """Allows request with correct api_key query parameter."""
+    transport = ASGITransport(app=app_with_auth)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch("app.routers.printers.get_available_printers", return_value=[]):
+            resp = await client.get("/api/printers?api_key=test-secret-key")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_health_always_accessible(app_with_auth):
+    """Health endpoint is always accessible even with API key set."""
+    transport = ASGITransport(app=app_with_auth)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/health")
+        assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_ingress_bypasses_key(app_with_auth):
+    """Requests with X-Ingress-Path header bypass API key check."""
+    transport = ASGITransport(app=app_with_auth)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch("app.routers.printers.get_available_printers", return_value=[]):
+            resp = await client.get(
+                "/api/printers",
+                headers={"X-Ingress-Path": "/hassio/ingress/zebra-label-printer"},
+            )
+        assert resp.status_code == 200

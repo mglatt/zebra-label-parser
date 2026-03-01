@@ -8,6 +8,7 @@ Print shipping labels from any PDF or image to a Zebra thermal printer.
 2. Configure the printer in CUPS (usually at `http://your-ha-ip:631`)
 3. Install this addon and set the printer name in the configuration
 4. Optionally add an Anthropic API key for smart label extraction from multi-page or cluttered PDFs
+5. Set an **API Key** in the addon settings to protect direct access to port 8099 (the sidebar is always accessible without it)
 
 ## Usage
 
@@ -20,11 +21,40 @@ Print shipping labels from any PDF or image to a Zebra thermal printer.
 
 ### From your phone
 
-1. Open the HA Companion App
+There are two ways to print from your phone:
+
+**Option A: Use the sidebar (simple)**
+
+1. Open the HA Companion App on your phone
 2. Tap **Label Printer** in the sidebar
 3. Tap the drop zone to open the file picker
 4. Select a shipping label PDF from your Downloads, email, or files
 5. The label prints automatically
+
+**Option B: Share from any app via iOS Shortcut (recommended)**
+
+Set up a one-time iOS Shortcut so you can print labels directly from the
+share sheet in Mail, Safari, Files, or any app. The Shortcut sends the file
+straight to the addon's API — no HA automation or `rest_command` needed.
+
+1. Open the **Shortcuts** app on your iPhone
+2. Create a new shortcut named **"Print Label"**
+3. Tap the **(i)** button at the bottom and enable **Show in Share Sheet**
+4. Set the share sheet to accept **PDFs** and **Images**
+5. Add these actions in order:
+   - **Base64 Encode** — input: *Shortcut Input*
+   - **URL** — enter: `http://<your-ha-ip>:8099/api/labels/webhook`
+   - **Get Contents of URL** — Method: **POST**, Headers: `Content-Type: application/json` and `X-API-Key: <your-api-key>`, Body (JSON):
+     | Key | Value |
+     |-----|-------|
+     | `file_base64` | *(Base64 Encoded variable)* |
+     | `filename` | *(Shortcut Input → Name)* |
+6. Save the shortcut
+
+**Usage:** From any app, tap **Share** → **Print Label** and the label prints.
+
+> **Note:** This works when your phone is on the same network as Home
+> Assistant. For remote printing, use a VPN such as Tailscale or WireGuard.
 
 ### Auto-print from a shared folder
 
@@ -56,6 +86,10 @@ addon: zebra-label-printer
 ```
 
 ## API
+
+If an **API Key** is set in the addon configuration, direct requests to port
+8099 must include it as an `X-API-Key` header or `?api_key=` query parameter.
+Requests through the HA sidebar (ingress) are always allowed.
 
 The addon exposes these endpoints for automations:
 
