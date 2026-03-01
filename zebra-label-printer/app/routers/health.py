@@ -6,10 +6,26 @@ from app.services.print_service import get_available_printers
 
 router = APIRouter(tags=["health"])
 
+_PRINTER_STATE_NAMES = {
+    3: "idle",
+    4: "processing",
+    5: "stopped",
+}
+
 
 @router.get("/api/health")
-async def health():
-    return {"status": "ok"}
+async def health(request: Request):
+    settings = request.app.state.settings
+    printers = []
+    cups_ok = False
+    try:
+        printers = get_available_printers(cups_server=settings.cups_server)
+        cups_ok = True
+    except Exception:
+        pass
+
+    status = "ok" if cups_ok else "degraded"
+    return {"status": status, "cups_reachable": cups_ok, "printer_count": len(printers)}
 
 
 @router.get("/api/debug")

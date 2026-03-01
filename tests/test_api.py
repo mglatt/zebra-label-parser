@@ -18,11 +18,30 @@ def app():
 
 @pytest.mark.asyncio
 async def test_health(app):
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/health")
-        assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+    with patch("app.routers.health.get_available_printers") as mock_printers:
+        mock_printers.return_value = [{"name": "Zebra", "state": 3}]
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/health")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "ok"
+            assert data["cups_reachable"] is True
+            assert data["printer_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_cups_unreachable(app):
+    with patch("app.routers.health.get_available_printers") as mock_printers:
+        mock_printers.side_effect = Exception("connection refused")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/health")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "degraded"
+            assert data["cups_reachable"] is False
+            assert data["printer_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -35,6 +54,26 @@ async def test_printers_endpoint(app):
             assert resp.status_code == 200
             data = resp.json()
             assert len(data["printers"]) == 1
+            assert data["printers"][0]["state_name"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_printers_state_names(app):
+    with patch("app.routers.printers.get_available_printers") as mock_printers:
+        mock_printers.return_value = [
+            {"name": "Idle", "info": "", "state": 3, "uri": ""},
+            {"name": "Busy", "info": "", "state": 4, "uri": ""},
+            {"name": "Down", "info": "", "state": 5, "uri": ""},
+            {"name": "Weird", "info": "", "state": 99, "uri": ""},
+        ]
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/printers")
+            printers = {p["name"]: p["state_name"] for p in resp.json()["printers"]}
+            assert printers["Idle"] == "idle"
+            assert printers["Busy"] == "processing"
+            assert printers["Down"] == "stopped"
+            assert printers["Weird"] == "unknown"
 
 
 @pytest.mark.asyncio
