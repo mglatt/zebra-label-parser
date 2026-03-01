@@ -111,6 +111,44 @@ async def test_print_empty_file(app):
         assert resp.status_code == 400
 
 
+@pytest.mark.asyncio
+async def test_print_failure_returns_502(app):
+    """Print endpoint returns HTTP 502 when the pipeline reports failure."""
+    png_bytes = _make_png_bytes()
+
+    with patch("app.services.pipeline.print_zpl") as mock_print:
+        mock_print.return_value = {"success": False, "error": "printer offline"}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/labels/print",
+                files={"file": ("test.png", png_bytes, "image/png")},
+                data={"printer": "Zebra"},
+            )
+            assert resp.status_code == 502
+            data = resp.json()
+            assert data["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_webhook_failure_returns_502(app):
+    """Webhook endpoint returns HTTP 502 when the pipeline reports failure."""
+    png_bytes = _make_png_bytes()
+    b64 = base64.b64encode(png_bytes).decode()
+
+    with patch("app.services.pipeline.print_zpl") as mock_print:
+        mock_print.return_value = {"success": False, "error": "printer offline"}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/labels/webhook",
+                json={"file_base64": b64, "filename": "label.png", "printer": "Zebra"},
+            )
+            assert resp.status_code == 502
+            data = resp.json()
+            assert data["success"] is False
+
+
 # --- Webhook endpoint tests ---
 
 

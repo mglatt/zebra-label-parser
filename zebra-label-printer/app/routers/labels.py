@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.services.pipeline import process_and_print
@@ -41,6 +42,8 @@ async def print_label(
         printer_name=printer_name,
         scale_pct=scale_pct,
     )
+    if not result.get("success"):
+        return JSONResponse(status_code=502, content=result)
     return result
 
 
@@ -95,4 +98,6 @@ async def webhook_print(request: Request, payload: WebhookPayload):
         settings=settings,
         printer_name=printer_name,
     )
+    if not result.get("success"):
+        return JSONResponse(status_code=502, content=result)
     return result
