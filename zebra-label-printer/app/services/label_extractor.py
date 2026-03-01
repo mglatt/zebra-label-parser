@@ -30,6 +30,10 @@ Return the bounding box as percentages of image dimensions (0-100):
 If the shipping label fills the entire image, return:
 {"x1_pct": 0, "y1_pct": 0, "x2_pct": 100, "y2_pct": 100}
 
+If there is NO shipping label in this image (e.g. it is an instruction page, \
+packing slip, or receipt with no carrier label), return:
+{"no_label": true}
+
 Return ONLY valid JSON, no other text."""
 
 
@@ -51,6 +55,10 @@ def _parse_bbox(text: str, width: int, height: int) -> Optional[dict]:
         return None
     try:
         data = json.loads(text[start:end])
+
+        # Explicit "no label" response from the model
+        if data.get("no_label"):
+            return {"no_label": True}
 
         # Convert percentage coords to pixels
         if "x1_pct" in data:
@@ -169,23 +177,26 @@ async def extract_label_region(
     image: Image.Image,
     api_key: Optional[str],
     model: str = "claude-sonnet-4-20250514",
-) -> Image.Image:
+    strict: bool = False,
+) -> Optional[Image.Image]:
     """Use Claude Vision to find and crop the shipping label from an image.
 
-    Returns the cropped label region, or the original image if extraction
-    fails or no API key is configured.
-
-    Falls back to a letter-size heuristic crop if Vision doesn't produce
-    a usable result on a letter-size input.
+    Returns the cropped label region.  When *strict* is ``False`` (the
+    default), falls back to a letter-size heuristic crop or the original
+    image so the caller always gets an image.  When *strict* is ``True``
+    (used during multi-page scanning), returns ``None`` when no label is
+    confidently detected — no fallbacks are applied.
     """
     is_letter = _is_letter_size(image.width, image.height)
     logger.info(
-        "Extraction input: %dx%d, letter_size=%s, has_api_key=%s",
-        image.width, image.height, is_letter, bool(api_key),
+        "Extraction input: %dx%d, letter_size=%s, has_api_key=%s, strict=%s",
+        image.width, image.height, is_letter, bool(api_key), strict,
     )
 
     if not api_key:
         logger.info("No API key configured, skipping Vision extraction")
+        if strict:
+            return None
         if is_letter:
             return _letter_size_fallback_crop(image)
         return image
@@ -227,13 +238,24 @@ async def extract_label_region(
         bbox = _parse_bbox(reply, image.width, image.height)
 
         if bbox is not None:
-            logger.info("Parsed bbox: x1=%d y1=%d x2=%d y2=%d", bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"])
-            cropped = _validate_and_crop(bbox, image)
-            if cropped is not None:
-                return cropped
-            logger.info("Vision bbox rejected by validation")
+            if bbox.get("no_label"):
+                logger.info("Vision reports no shipping label on this page")
+                if strict:
+                    return None
+                # Non-strict: fall through to heuristic fallback below
+            else:
+                logger.info("Parsed bbox: x1=%d y1=%d x2=%d y2=%d",
+                            bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"])
+                cropped = _validate_and_crop(bbox, image)
+                if cropped is not None:
+                    return cropped
+                logger.info("Vision bbox rejected by validation")
+                if strict:
+                    return None
         else:
             logger.warning("Failed to parse bbox from response: %s", reply)
+            if strict:
+                return None
 
         # Vision didn't produce a usable crop — fall back to heuristic
         if is_letter:
@@ -244,6 +266,8 @@ async def extract_label_region(
 
     except Exception:
         logger.exception("Label extraction failed")
+        if strict:
+            return None
         if is_letter:
             logger.info("Falling back to letter-size heuristic crop")
             return _letter_size_fallback_crop(image)
