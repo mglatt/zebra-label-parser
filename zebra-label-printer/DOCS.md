@@ -8,6 +8,7 @@ Print shipping labels from any PDF or image to a Zebra thermal printer.
 2. Configure the printer in CUPS (usually at `http://your-ha-ip:631`)
 3. Install this addon and set the printer name in the configuration
 4. Optionally add an Anthropic API key for smart label extraction from multi-page or cluttered PDFs
+5. Set an **API Key** in the addon settings to protect direct access to port 8099 (the sidebar is always accessible without it)
 
 ## Usage
 
@@ -43,7 +44,7 @@ straight to the addon's API — no HA automation or `rest_command` needed.
 5. Add these actions in order:
    - **Base64 Encode** — input: *Shortcut Input*
    - **URL** — enter: `http://<your-ha-ip>:8099/api/labels/webhook`
-   - **Get Contents of URL** — Method: **POST**, Headers: `Content-Type: application/json`, Body (JSON):
+   - **Get Contents of URL** — Method: **POST**, Headers: `Content-Type: application/json` and `X-API-Key: <your-api-key>`, Body (JSON):
      | Key | Value |
      |-----|-------|
      | `file_base64` | *(Base64 Encoded variable)* |
@@ -85,6 +86,10 @@ addon: zebra-label-printer
 ```
 
 ## API
+
+If an **API Key** is set in the addon configuration, direct requests to port
+8099 must include it as an `X-API-Key` header or `?api_key=` query parameter.
+Requests through the HA sidebar (ingress) are always allowed.
 
 The addon exposes these endpoints for automations:
 

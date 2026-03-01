@@ -19,6 +19,9 @@ def _load_ha_options() -> dict:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ZLP_", env_file=".env", extra="ignore")
 
+    # Authentication
+    api_key: Optional[str] = None
+
     # Claude API
     anthropic_api_key: Optional[str] = None
     claude_model: str = "claude-sonnet-4-20250514"
@@ -47,6 +50,8 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         # Overlay HA options onto env-sourced values
         ha = _load_ha_options()
+        if ha.get("api_key") and not self.api_key:
+            self.api_key = ha["api_key"]
         if ha.get("anthropic_api_key") and not self.anthropic_api_key:
             self.anthropic_api_key = ha["anthropic_api_key"]
         if ha.get("printer_name") and not self.printer_name:

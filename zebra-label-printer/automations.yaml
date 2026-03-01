@@ -2,6 +2,8 @@
 #
 # The addon uses host_network: true so it is reachable at
 # http://<your-ha-ip>:8099 from both HA Core and the local network.
+# Set an API Key in the addon settings to require authentication on
+# direct requests (ingress/sidebar access is always allowed).
 #
 # Copy the automations you want into your HA automations.yaml or
 # create them via the HA UI (Settings → Automations & Scenes → Create).
@@ -23,7 +25,9 @@
 #        http://<your-ha-ip>:8099/api/labels/webhook
 #   7. Add action: "Get Contents of URL"
 #        - Method: POST
-#        - Headers: Content-Type = application/json
+#        - Headers:
+#            Content-Type = application/json
+#            X-API-Key    = <your-api-key>  (from addon settings)
 #        - Request Body: JSON
 #          file_base64  = (select "Base64 Encoded" variable)
 #          filename     = (select "Shortcut Input" → Name)
@@ -62,6 +66,8 @@
 #        zebra_print_label:
 #          url: "http://localhost:8099/api/labels/webhook"
 #          method: POST
+#          headers:
+#            X-API-Key: "YOUR_API_KEY"
 #          content_type: "application/json"
 #          payload: '{"file_path": "{{ file_path }}"}'
 #

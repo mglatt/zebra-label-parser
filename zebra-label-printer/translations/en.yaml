@@ -1,4 +1,11 @@
 configuration:
+  api_key:
+    name: API Key
+    description: >-
+      Protect the addon's API when accessed directly on port 8099.
+      Required as an X-API-Key header or ?api_key= query parameter.
+      Requests through the HA sidebar (ingress) are always allowed.
+      Leave blank to allow all requests without authentication.
   anthropic_api_key:
     name: Anthropic API Key
     description: >-
