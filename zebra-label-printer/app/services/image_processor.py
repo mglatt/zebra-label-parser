@@ -1,7 +1,44 @@
 """Prepare images for thermal label printing."""
 from __future__ import annotations
 
+import logging
+
 from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+
+def _trim_whitespace(
+    img: Image.Image, margin: int = 10, threshold: int = 245
+) -> Image.Image:
+    """Remove white/near-white borders so content dimensions are accurate.
+
+    Converts to grayscale, treats pixels darker than *threshold* as content,
+    and crops to the bounding box of that content plus *margin* pixels on
+    each side.  Returns the original image unchanged when it is entirely
+    white or when trimming would remove less than 5 % of the area.
+    """
+    gray = img.convert("L")
+    binary = gray.point(lambda p: 255 if p < threshold else 0)
+    bbox = binary.getbbox()
+    if bbox is None:
+        return img  # entirely white / near-white
+
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, x1 - margin)
+    y1 = max(0, y1 - margin)
+    x2 = min(img.width, x2 + margin)
+    y2 = min(img.height, y2 + margin)
+
+    trimmed_area = (x2 - x1) * (y2 - y1)
+    if trimmed_area / (img.width * img.height) > 0.95:
+        return img  # almost no whitespace to remove
+
+    logger.info(
+        "Trimmed whitespace: %dx%d -> %dx%d",
+        img.width, img.height, x2 - x1, y2 - y1,
+    )
+    return img.crop((x1, y1, x2, y2))
 
 
 def prepare_label_image(
@@ -13,6 +50,7 @@ def prepare_label_image(
 ) -> Image.Image:
     """Resize, orient, and convert an image to a 1-bit monochrome label.
 
+    - Trims whitespace so rotation/centering uses actual content bounds
     - Auto-rotates landscape images to portrait orientation
     - Resizes to fit within width x height preserving aspect ratio
     - scale_pct (50-100) shrinks the image within the label, adding margins
@@ -20,6 +58,9 @@ def prepare_label_image(
     - Converts to 1-bit monochrome (threshold by default, dithering optional)
     """
     img = image.convert("RGB")
+
+    # Trim whitespace so dimensions reflect actual content, not a loose crop
+    img = _trim_whitespace(img)
 
     # Auto-rotate: if image is landscape but label is portrait, rotate
     img_landscape = img.width > img.height
