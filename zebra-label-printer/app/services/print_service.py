@@ -76,12 +76,14 @@ def get_available_printers(cups_server: Optional[str] = None) -> list[dict]:
 def _check_job_status(conn, job_id: int, printer_name: str) -> None:
     """Log the status of a submitted CUPS job."""
     try:
-        time.sleep(0.5)  # brief wait for CUPS to process
+        time.sleep(1)  # brief wait for CUPS to process
         jobs = conn.getJobs(which_jobs="all")
         if job_id in jobs:
             job = jobs[job_id]
-            state = job.get("job-state", "?")
-            state_reasons = job.get("job-state-reasons", "none")
+            logger.info("Job %d attributes: %s", job_id, dict(job))
+            state = job.get("job-state", job.get("job_state", "?"))
+            state_reasons = job.get("job-state-reasons",
+                                    job.get("job_state_reasons", "none"))
             # CUPS job states: 3=pending, 4=held, 5=processing, 6=stopped,
             #                  7=canceled, 8=aborted, 9=completed
             state_names = {3: "pending", 4: "held", 5: "processing",
@@ -89,7 +91,8 @@ def _check_job_status(conn, job_id: int, printer_name: str) -> None:
             logger.info("Job %d status: %s (%s), reasons: %s",
                         job_id, state_names.get(state, state), state, state_reasons)
         else:
-            logger.warning("Job %d not found in CUPS job list", job_id)
+            logger.warning("Job %d not found in CUPS job list (checked %d jobs)",
+                           job_id, len(jobs))
     except Exception:
         logger.exception("Failed to check job %d status", job_id)
 

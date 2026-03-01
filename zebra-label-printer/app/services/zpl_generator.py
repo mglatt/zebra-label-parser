@@ -66,6 +66,7 @@ def image_to_zpl(image: Image.Image) -> str:
     Typical compression ratio for shipping labels: ~10-20x.
     """
     data, bytes_per_row, total_bytes = _image_to_bytes(image)
+    width, height = image.size
 
     compressed = zlib.compress(data, level=9)
     encoded = base64.b64encode(compressed).decode("ascii")
@@ -74,6 +75,8 @@ def image_to_zpl(image: Image.Image) -> str:
 
     zpl = (
         f"^XA\n"
+        f"^PW{width}\n"
+        f"^LL{height}\n"
         f"^FO0,0\n"
         f"^GFA,{total_bytes},{total_bytes},{bytes_per_row},"
         f":Z64:{encoded}:{crc_hex}\n"
@@ -89,10 +92,13 @@ def image_to_zpl_ascii(image: Image.Image) -> str:
     Fallback for printers that don't support Z64.
     """
     data, bytes_per_row, total_bytes = _image_to_bytes(image)
+    width, height = image.size
     hex_data = data.hex().upper()
 
     zpl = (
         f"^XA\n"
+        f"^PW{width}\n"
+        f"^LL{height}\n"
         f"^FO0,0\n"
         f"^GFA,{total_bytes},{total_bytes},{bytes_per_row},"
         f"{hex_data}\n"
