@@ -23,6 +23,14 @@
   const againBtn = document.getElementById("again-btn");
   const previewContainer = document.getElementById("preview-container");
   const previewImage = document.getElementById("preview-image");
+  const printerStatus = document.getElementById("printer-status");
+
+  // Printer state cache: { printerName: "idle"|"processing"|"stopped"|"unknown" }
+  let printerStates = {};
+
+  // Status polling interval (30 seconds)
+  const STATUS_POLL_MS = 30000;
+  let pollTimer = null;
 
   // State management
   function showState(state) {
@@ -30,6 +38,23 @@
     stateProcessing.classList.remove("active");
     stateDone.classList.remove("active");
     state.classList.add("active");
+  }
+
+  // Update the status dot based on the selected printer
+  function updateStatusDot() {
+    const selected = printerSelect.value;
+    printerStatus.classList.remove("idle", "processing", "stopped", "unknown", "no-printers");
+
+    if (!selected) {
+      printerStatus.classList.add("no-printers");
+      printerStatus.title = "No printer selected";
+      return;
+    }
+
+    const state = printerStates[selected] || "unknown";
+    printerStatus.classList.add(state);
+    const labels = { idle: "Ready", processing: "Printing", stopped: "Stopped", unknown: "Unknown" };
+    printerStatus.title = labels[state] || "Unknown";
   }
 
   // Printer list
@@ -42,9 +67,11 @@
       const data = await res.json();
       console.log("[ZLP] printers data:", JSON.stringify(data));
       printerSelect.innerHTML = "";
+      printerStates = {};
 
       if (data.printers.length === 0) {
         printerSelect.innerHTML = '<option value="">No printers found</option>';
+        updateStatusDot();
         return;
       }
 
@@ -54,12 +81,20 @@
         opt.textContent = p.info ? `${p.name} (${p.info})` : p.name;
         if (p.name === data.default) opt.selected = true;
         printerSelect.appendChild(opt);
+        printerStates[p.name] = p.state_name || "unknown";
       });
+
+      updateStatusDot();
     } catch (err) {
       console.error("[ZLP] loadPrinters failed:", err);
       printerSelect.innerHTML = '<option value="">Failed to load printers</option>';
+      printerStates = {};
+      updateStatusDot();
     }
   }
+
+  // Update status dot when printer selection changes
+  printerSelect.addEventListener("change", updateStatusDot);
 
   refreshBtn.addEventListener("click", loadPrinters);
 
@@ -161,6 +196,13 @@
     showState(stateIdle);
   });
 
+  // Periodic status polling
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(loadPrinters, STATUS_POLL_MS);
+  }
+
   // Init
   loadPrinters();
+  startPolling();
 })();

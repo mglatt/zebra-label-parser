@@ -66,6 +66,37 @@ h1 {
   background: #eee;
 }
 
+/* Printer status indicator */
+.printer-status {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #bbb;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+
+.printer-status.idle {
+  background: #4caf50;
+}
+
+.printer-status.processing {
+  background: #ff9800;
+}
+
+.printer-status.stopped {
+  background: #f44336;
+}
+
+.printer-status.unknown {
+  background: #bbb;
+}
+
+.printer-status.no-printers {
+  background: #f44336;
+}
+
 /* States */
 .state {
   display: none;
