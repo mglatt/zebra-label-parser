@@ -40,12 +40,20 @@ def test_get_printers_pycups():
 def test_print_zpl_pycups():
     with patch("app.services.print_service.cups", create=True) as mock_cups:
         mock_conn = MagicMock()
-        mock_conn.printFile.return_value = 42
+        # getPrinters must return a non-zebrahttp URI so loopback guard passes
+        mock_conn.getPrinters.return_value = {
+            "Zebra": {"device-uri": "usb://Zebra/ZD420"},
+        }
+        mock_conn.createJob.return_value = 42
         mock_cups.Connection.return_value = mock_conn
 
         result = print_zpl("^XA^XZ", "Zebra")
         assert result["success"] is True
         assert result["job_id"] == 42
+        mock_conn.createJob.assert_called_once()
+        mock_conn.startDocument.assert_called_once()
+        mock_conn.writeRequestData.assert_called_once()
+        mock_conn.finishDocument.assert_called_once()
 
 
 @patch("app.services.print_service._HAS_PYCUPS", False)
@@ -53,7 +61,8 @@ def test_print_zpl_lp_fallback():
     with patch("app.services.print_service.subprocess") as mock_sub:
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "request id is Zebra-123"
+        mock_result.stdout = b"request id is Zebra-123"
+        mock_result.stderr = b""
         mock_sub.run.return_value = mock_result
 
         result = print_zpl("^XA^XZ", "Zebra")

@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import tempfile
 import time
 from typing import Optional
 
@@ -138,23 +137,28 @@ def print_zpl(
                 len(zpl), printer_name, "pycups" if _HAS_PYCUPS else "lp")
     logger.info("ZPL preview (first 200 chars): %s", zpl[:200])
 
-    # Write ZPL to a temp file (both pycups and lp need a file path)
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".zpl", delete=False) as f:
-        f.write(zpl)
-        zpl_path = f.name
+    zpl_bytes = zpl.encode("utf-8")
 
     if _HAS_PYCUPS:
         try:
             conn = cups.Connection()
-            # Force raw mode by setting the document MIME type so CUPS
-            # bypasses its filter chain (driver).  This is more reliable
-            # than the PPD option {"raw": ""}.
-            job_id = conn.printFile(
+            # Stream ZPL data directly over IPP instead of using printFile(),
+            # which needs a local temp file that the CUPS daemon may not be
+            # able to access (e.g. container filesystem isolation).
+            job_id = conn.createJob(
                 printer_name,
-                zpl_path,
                 "zebra-label",
                 {"document-format": "application/vnd.cups-raw"},
             )
+            conn.startDocument(
+                printer_name,
+                job_id,
+                "zebra-label.zpl",
+                "application/vnd.cups-raw",
+                1,  # last_document=1 (this is the only document)
+            )
+            conn.writeRequestData(zpl_bytes, len(zpl_bytes))
+            conn.finishDocument(printer_name)
             logger.info("CUPS job %d submitted to %s", job_id, printer_name)
             _check_job_status(conn, job_id, printer_name)
             return {"success": True, "job_id": job_id, "printer": printer_name}
@@ -162,16 +166,18 @@ def print_zpl(
             logger.exception("CUPS print failed")
             return {"success": False, "error": str(e)}
 
-    # Fallback: lp command (CUPS_SERVER env var directs lp to the remote server)
+    # Fallback: pipe ZPL via stdin to lp (avoids temp file issues).
+    # CUPS_SERVER env var directs lp to the remote server automatically.
     try:
         result = subprocess.run(
-            ["lp", "-d", printer_name, "-o", "raw", zpl_path],
-            capture_output=True, text=True, timeout=10,
+            ["lp", "-d", printer_name, "-o", "raw"],
+            input=zpl_bytes, capture_output=True, timeout=10,
         )
         if result.returncode != 0:
-            logger.error("lp failed: %s", result.stderr.strip())
-            return {"success": False, "error": result.stderr.strip()}
-        logger.info("lp job submitted to %s: %s", printer_name, result.stdout.strip())
+            logger.error("lp failed: %s", result.stderr.decode().strip())
+            return {"success": False, "error": result.stderr.decode().strip()}
+        logger.info("lp job submitted to %s: %s",
+                     printer_name, result.stdout.decode().strip())
         return {"success": True, "job_id": -1, "printer": printer_name}
     except Exception as e:
         logger.exception("lp print failed")
