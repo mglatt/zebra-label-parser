@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tempfile
 from typing import Optional
@@ -18,12 +19,25 @@ except ImportError:
     logger.info("pycups not available, will use lp command as fallback")
 
 
+def _set_cups_server(server: Optional[str]) -> None:
+    """Point both pycups and libcups at a remote CUPS server."""
+    if not server:
+        return
+    # Environment variable is read by the underlying libcups C library and
+    # by command-line tools (lpstat, lp).  cups.setServer() sets the same
+    # value through the pycups binding.
+    os.environ["CUPS_SERVER"] = server
+    if _HAS_PYCUPS:
+        cups.setServer(server)
+    logger.info("CUPS server set to %s", server)
+
+
 def get_available_printers(cups_server: Optional[str] = None) -> list[dict]:
     """List printers from CUPS."""
+    _set_cups_server(cups_server)
+
     if _HAS_PYCUPS:
         try:
-            if cups_server:
-                cups.setServer(cups_server)
             conn = cups.Connection()
             raw = conn.getPrinters()
             return [
@@ -36,10 +50,11 @@ def get_available_printers(cups_server: Optional[str] = None) -> list[dict]:
                 for name, info in raw.items()
             ]
         except Exception:
-            logger.exception("Failed to list CUPS printers")
+            logger.exception("Failed to list printers from CUPS server %s", cups_server)
             return []
 
-    # Fallback: parse lpstat output
+    # Fallback: parse lpstat output (CUPS_SERVER env var directs lpstat
+    # to the remote server automatically).
     try:
         result = subprocess.run(
             ["lpstat", "-p", "-d"],
@@ -63,6 +78,8 @@ def print_zpl(
     cups_server: Optional[str] = None,
 ) -> dict:
     """Send a ZPL string to a CUPS printer as a raw job."""
+    _set_cups_server(cups_server)
+
     # Write ZPL to a temp file (both pycups and lp need a file path)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".zpl", delete=False) as f:
         f.write(zpl)
@@ -70,8 +87,6 @@ def print_zpl(
 
     if _HAS_PYCUPS:
         try:
-            if cups_server:
-                cups.setServer(cups_server)
             conn = cups.Connection()
             job_id = conn.printFile(
                 printer_name,
@@ -85,7 +100,7 @@ def print_zpl(
             logger.exception("CUPS print failed")
             return {"success": False, "error": str(e)}
 
-    # Fallback: lp command
+    # Fallback: lp command (CUPS_SERVER env var directs lp to the remote server)
     try:
         result = subprocess.run(
             ["lp", "-d", printer_name, "-o", "raw", zpl_path],

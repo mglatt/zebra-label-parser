@@ -38,13 +38,6 @@ PYEOF
     eval "$HA_ENV"
 fi
 
-# Start CUPS if no external CUPS server is configured
-if [ -z "$ZLP_CUPS_SERVER" ]; then
-    echo "Starting local CUPS daemon..."
-    cupsd
-    sleep 1
-fi
-
 echo "Starting Zebra Label Parser on port ${ZLP_PORT:-8099}..."
 exec uvicorn app.main:app \
     --host "${ZLP_HOST:-0.0.0.0}" \
