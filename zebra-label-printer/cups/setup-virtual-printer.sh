@@ -16,13 +16,15 @@ set -euo pipefail
 
 PRINTER_NAME="${1:-Zebra_LP2844}"
 API_PORT="${2:-8099}"
+HASS_IP="${3:-localhost}"
 QUEUE_NAME="ZebraLabel"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=== Zebra Label Virtual Printer Setup ==="
-echo "  Printer name:  ${PRINTER_NAME}"
-echo "  API port:      ${API_PORT}"
-echo "  CUPS queue:    ${QUEUE_NAME}"
+echo "  Printer name:         ${PRINTER_NAME}"
+echo "  API port:             ${API_PORT}"
+echo "  Home Assistant IP:    ${HASS_IP}"
+echo "  CUPS queue:           ${QUEUE_NAME}"
 echo ""
 
 # Check root
@@ -50,7 +52,7 @@ echo "  Installed: ${BACKEND_DIR}/zebrahttp"
 
 # Step 2: Create CUPS print queue
 echo "[2/4] Creating CUPS print queue '${QUEUE_NAME}'..."
-DEVICE_URI="zebrahttp://localhost:${API_PORT}/api/labels/print?printer=${PRINTER_NAME}"
+DEVICE_URI="zebrahttp://${HASS_IP}:${API_PORT}/api/labels/print?printer=${PRINTER_NAME}"
 lpadmin -p "${QUEUE_NAME}" \
     -E \
     -v "${DEVICE_URI}" \
