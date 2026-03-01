@@ -26,6 +26,10 @@ to just the shipping label, excluding the receipt and instructions.
 - A standalone 4x6" shipping label with no surrounding content.
 - A photo of a shipping label on a package.
 
+For a typical full-page USPS or FedEx document, the shipping label is usually \
+in the upper-left quadrant, covering roughly the left 45-55% and top 50-60% \
+of the page.
+
 ALWAYS return the bounding box of the shipping label as percentages of the \
 image dimensions (0-100):
 
@@ -81,22 +85,63 @@ def _parse_bbox(text: str, width: int, height: int) -> Optional[dict]:
         return None
 
 
-def _validate_bbox(bbox: dict, width: int, height: int) -> str:
-    """Check that the bounding box is reasonable.
+def _is_letter_size(width: int, height: int) -> bool:
+    """Check if image dimensions match US letter proportions (8.5x11").
 
-    Returns:
-        "crop"  – bbox is valid, crop to it
-        "full"  – bbox covers the whole image or is invalid, use full image
+    Works for both portrait and landscape orientations.
+    Allows ~10% tolerance for rendering differences.
     """
+    ratio = max(width, height) / min(width, height)
+    letter_ratio = 11.0 / 8.5  # ~1.294
+    return abs(ratio - letter_ratio) < 0.13
+
+
+def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
+    """Apply a heuristic crop for a standard letter-size page.
+
+    On a typical USPS/FedEx/UPS full-page PDF, the 4x6" shipping label
+    occupies roughly the upper-left portion:
+    - Width: 4" / 8.5" ≈ 47% of page width
+    - Height: 6" / 11" ≈ 55% of page height
+
+    We use slightly generous bounds to avoid clipping.
+    """
+    # Ensure we're working with portrait orientation
+    w, h = image.width, image.height
+    if w > h:
+        # Landscape — the label is in the left portion
+        crop_w = int(w * 0.57)
+        crop_h = int(h * 0.97)
+        cropped = image.crop((0, 0, crop_w, crop_h))
+    else:
+        # Portrait — label is in the upper-left
+        crop_w = int(w * 0.50)
+        crop_h = int(h * 0.58)
+        cropped = image.crop((0, 0, crop_w, crop_h))
+
+    logger.info(
+        "Letter-size fallback crop: %dx%d -> %dx%d",
+        w, h, cropped.width, cropped.height,
+    )
+    return cropped
+
+
+def _validate_and_crop(
+    bbox: dict, image: Image.Image
+) -> Optional[Image.Image]:
+    """Validate bbox and return cropped image, or None if invalid."""
+    width, height = image.width, image.height
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
 
     # Must be positive dimensions
     if x2 <= x1 or y2 <= y1:
-        return "full"
+        logger.warning("Invalid bbox dimensions: (%d,%d)-(%d,%d)", x1, y1, x2, y2)
+        return None
 
     # Must be within image bounds (with small tolerance)
     if x1 < -5 or y1 < -5 or x2 > width + 5 or y2 > height + 5:
-        return "full"
+        logger.warning("Bbox out of bounds: (%d,%d)-(%d,%d) for %dx%d image", x1, y1, x2, y2, width, height)
+        return None
 
     bbox_area = (x2 - x1) * (y2 - y1)
     image_area = width * height
@@ -104,15 +149,24 @@ def _validate_bbox(bbox: dict, width: int, height: int) -> str:
 
     # Too small = likely wrong
     if coverage < 0.10:
-        logger.warning("Bbox too small (%.1f%% of image), using full image", coverage * 100)
-        return "full"
+        logger.warning("Bbox too small (%.1f%% of image)", coverage * 100)
+        return None
 
-    # Covers >90% of the image = it's already just a label, skip crop
+    # Covers >90% of the image = no meaningful crop
     if coverage > 0.90:
-        logger.info("Bbox covers %.1f%% of image, skipping crop", coverage * 100)
-        return "full"
+        logger.info("Bbox covers %.1f%% of image, no meaningful crop", coverage * 100)
+        return None
 
-    return "crop"
+    # Clamp to image bounds and crop
+    x1 = max(0, int(x1))
+    y1 = max(0, int(y1))
+    x2 = min(width, int(x2))
+    y2 = min(height, int(y2))
+
+    cropped = image.crop((x1, y1, x2, y2))
+    logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
+                x1, y1, x2, y2, cropped.width, cropped.height, coverage * 100)
+    return cropped
 
 
 async def extract_label_region(
@@ -124,9 +178,20 @@ async def extract_label_region(
 
     Returns the cropped label region, or the original image if extraction
     fails or no API key is configured.
+
+    Falls back to a letter-size heuristic crop if Vision doesn't produce
+    a usable result on a letter-size input.
     """
+    is_letter = _is_letter_size(image.width, image.height)
+    logger.info(
+        "Extraction input: %dx%d, letter_size=%s, has_api_key=%s",
+        image.width, image.height, is_letter, bool(api_key),
+    )
+
     if not api_key:
-        logger.info("No API key configured, skipping label extraction")
+        logger.info("No API key configured, skipping Vision extraction")
+        if is_letter:
+            return _letter_size_fallback_crop(image)
         return image
 
     try:
@@ -166,26 +231,29 @@ async def extract_label_region(
         )
 
         reply = "{" + response.content[0].text
+        logger.info("Vision raw response: %s", reply)
+
         bbox = _parse_bbox(reply, image.width, image.height)
 
-        if bbox is None:
-            logger.info("No label region detected, using full image")
-            return image
+        if bbox is not None:
+            logger.info("Parsed bbox: x1=%d y1=%d x2=%d y2=%d", bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"])
+            cropped = _validate_and_crop(bbox, image)
+            if cropped is not None:
+                return cropped
+            logger.info("Vision bbox rejected by validation")
+        else:
+            logger.warning("Failed to parse bbox from response: %s", reply)
 
-        action = _validate_bbox(bbox, image.width, image.height)
-        if action == "full":
-            return image
+        # Vision didn't produce a usable crop — fall back to heuristic
+        if is_letter:
+            logger.info("Falling back to letter-size heuristic crop")
+            return _letter_size_fallback_crop(image)
 
-        # Clamp to image bounds
-        x1 = max(0, int(bbox["x1"]))
-        y1 = max(0, int(bbox["y1"]))
-        x2 = min(image.width, int(bbox["x2"]))
-        y2 = min(image.height, int(bbox["y2"]))
-
-        cropped = image.crop((x1, y1, x2, y2))
-        logger.info("Extracted label region: (%d,%d)-(%d,%d)", x1, y1, x2, y2)
-        return cropped
+        return image
 
     except Exception:
-        logger.exception("Label extraction failed, using full image")
+        logger.exception("Label extraction failed")
+        if is_letter:
+            logger.info("Falling back to letter-size heuristic crop")
+            return _letter_size_fallback_crop(image)
         return image
