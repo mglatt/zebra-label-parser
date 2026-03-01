@@ -5,11 +5,17 @@
 # Permissions: root:root 0755
 #
 # Device URI format:
-#   zebrahttp://HOST:PORT/api/labels/print?printer=PRINTER_NAME
+#   zebrahttp://HOST:PORT/api/labels/print?printer=PRINTER_NAME&token=HA_TOKEN
 #
-# Example:
+# Examples:
+#   # Local server (no auth):
 #   lpadmin -p ZebraLabel -E \
 #     -v "zebrahttp://localhost:8099/api/labels/print?printer=Zebra_LP2844" \
+#     -m raw -D "Zebra Shipping Label Printer" -L "Network"
+#
+#   # Remote Home Assistant (with auth token):
+#   lpadmin -p ZebraLabel -E \
+#     -v "zebrahttp://homeassistant.local:8099/api/labels/print?printer=Zebra_LP2844&token=eyJ..." \
 #     -m raw -D "Zebra Shipping Label Printer" -L "Network"
 #
 # CUPS backend protocol:
@@ -35,12 +41,20 @@ FILE="$6"
 URI_BODY="${DEVICE_URI#zebrahttp://}"
 URL_PATH="http://${URI_BODY%%\?*}"
 
-# Extract printer name from query string (if present)
+# Extract query parameters from device URI
+QUERY=""
+[[ "$DEVICE_URI" == *"?"* ]] && QUERY="${DEVICE_URI#*\?}"
+
 PRINTER=""
-if [[ "$DEVICE_URI" == *"printer="* ]]; then
-    QUERY="${DEVICE_URI#*\?}"
+if [[ "$QUERY" == *"printer="* ]]; then
     PRINTER="${QUERY#*printer=}"
     PRINTER="${PRINTER%%&*}"
+fi
+
+TOKEN=""
+if [[ "$QUERY" == *"token="* ]]; then
+    TOKEN="${QUERY#*token=}"
+    TOKEN="${TOKEN%%&*}"
 fi
 
 # Read from file argument or stdin
@@ -56,7 +70,7 @@ fi
 # Derive a filename from the job title
 FILENAME="${TITLE:-label}.pdf"
 
-echo "INFO: zebrahttp: Sending job $JOB_ID \"$TITLE\" to $URL_PATH (printer=$PRINTER)" >&2
+echo "INFO: zebrahttp: Sending job $JOB_ID \"$TITLE\" to $URL_PATH (printer=$PRINTER${TOKEN:+, auth=yes})" >&2
 
 # Build curl args (-sS: silent but show errors)
 CURL_ARGS=(-sS -w "%{http_code}" --connect-timeout 10 --max-time 60)
@@ -64,6 +78,9 @@ CURL_ARGS+=(-X POST)
 CURL_ARGS+=(-F "file=@${INPUT};filename=${FILENAME}")
 if [ -n "$PRINTER" ]; then
     CURL_ARGS+=(-F "printer=${PRINTER}")
+fi
+if [ -n "$TOKEN" ]; then
+    CURL_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
 fi
 
 # Capture HTTP status code on stdout (-w); curl errors (-S) go to CURL_LOG via stderr redirect;

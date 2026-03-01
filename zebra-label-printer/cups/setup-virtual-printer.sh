@@ -6,22 +6,25 @@
 # Requires root privileges.
 #
 # Usage:
-#   sudo ./setup-virtual-printer.sh [PRINTER_NAME] [API_PORT]
+#   sudo ./setup-virtual-printer.sh [PRINTER_NAME] [API_URL] [AUTH_TOKEN]
 #
 # Examples:
-#   sudo ./setup-virtual-printer.sh                     # defaults: Zebra_LP2844, 8099
-#   sudo ./setup-virtual-printer.sh MyZebra 8099
+#   sudo ./setup-virtual-printer.sh                                             # local, defaults
+#   sudo ./setup-virtual-printer.sh Zebra_LP2844 localhost:8099                  # local, custom port
+#   sudo ./setup-virtual-printer.sh Zebra_LP2844 homeassistant.local:8099 eyJ... # remote HA with auth
 
 set -euo pipefail
 
 PRINTER_NAME="${1:-Zebra_LP2844}"
-API_PORT="${2:-8099}"
+API_URL="${2:-localhost:8099}"
+AUTH_TOKEN="${3:-}"
 QUEUE_NAME="ZebraLabel"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=== Zebra Label Virtual Printer Setup ==="
 echo "  Printer name:  ${PRINTER_NAME}"
-echo "  API port:      ${API_PORT}"
+echo "  API server:    ${API_URL}"
+echo "  Auth token:    ${AUTH_TOKEN:+(set)}"
 echo "  CUPS queue:    ${QUEUE_NAME}"
 echo ""
 
@@ -50,7 +53,10 @@ echo "  Installed: ${BACKEND_DIR}/zebrahttp"
 
 # Step 2: Create CUPS print queue
 echo "[2/4] Creating CUPS print queue '${QUEUE_NAME}'..."
-DEVICE_URI="zebrahttp://localhost:${API_PORT}/api/labels/print?printer=${PRINTER_NAME}"
+DEVICE_URI="zebrahttp://${API_URL}/api/labels/print?printer=${PRINTER_NAME}"
+if [ -n "$AUTH_TOKEN" ]; then
+    DEVICE_URI="${DEVICE_URI}&token=${AUTH_TOKEN}"
+fi
 lpadmin -p "${QUEUE_NAME}" \
     -E \
     -v "${DEVICE_URI}" \
@@ -58,7 +64,7 @@ lpadmin -p "${QUEUE_NAME}" \
     -D "Zebra Shipping Label Printer" \
     -L "Network" \
     -o printer-is-shared=true
-echo "  Device URI: ${DEVICE_URI}"
+echo "  Device URI: ${DEVICE_URI%%&token=*}"
 
 # Step 3: Enable printer sharing
 echo "[3/4] Enabling CUPS printer sharing..."
