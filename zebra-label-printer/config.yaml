@@ -34,6 +34,6 @@ schema:
 ports:
   8099/tcp: 8099
 ports_description:
-  8099/tcp: Web UI
+  8099/tcp: Label API (direct access for CUPS backend)
 map:
   - share:rw
