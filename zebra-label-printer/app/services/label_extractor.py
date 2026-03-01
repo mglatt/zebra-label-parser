@@ -122,10 +122,58 @@ def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
     return cropped
 
 
+# Expected label aspect ratio: 4:6 = 0.667 (portrait).
+# We accept anything between 0.5 and 1.0 as "close enough to portrait".
+# Outside that range we constrain.
+_LABEL_ASPECT = 4.0 / 6.0  # 0.667
+
+
+def _enforce_label_aspect(
+    x1: int, y1: int, x2: int, y2: int, img_w: int, img_h: int
+) -> tuple[int, int, int, int]:
+    """Constrain a bounding box to approximately 4:6 portrait aspect ratio.
+
+    If the crop is landscape (wider than tall), we assume the model found
+    the correct vertical extent but grabbed too much width. We shrink the
+    width to match a 4:6 ratio, centering horizontally.
+
+    If the crop is portrait but much too narrow, we expand width (clamped
+    to image bounds).
+    """
+    crop_w = x2 - x1
+    crop_h = y2 - y1
+
+    if crop_h == 0:
+        return x1, y1, x2, y2
+
+    aspect = crop_w / crop_h
+
+    # Already close to 4:6 — no adjustment needed
+    if 0.5 <= aspect <= 1.0:
+        return x1, y1, x2, y2
+
+    # Compute the ideal width for this height at 4:6 ratio
+    ideal_w = int(crop_h * _LABEL_ASPECT)
+    cx = (x1 + x2) // 2  # horizontal center of original crop
+
+    new_x1 = max(0, cx - ideal_w // 2)
+    new_x2 = min(img_w, new_x1 + ideal_w)
+    # Re-center if we hit the right edge
+    if new_x2 - new_x1 < ideal_w:
+        new_x1 = max(0, new_x2 - ideal_w)
+
+    logger.info(
+        "Aspect correction: %dx%d (%.2f) -> %dx%d (%.2f)",
+        crop_w, crop_h, aspect,
+        new_x2 - new_x1, crop_h, (new_x2 - new_x1) / crop_h,
+    )
+    return new_x1, y1, new_x2, y2
+
+
 def _validate_and_crop(
     bbox: dict, image: Image.Image
 ) -> Optional[Image.Image]:
-    """Validate bbox and return cropped image, or None if invalid."""
+    """Validate bbox, enforce aspect ratio, and return cropped image."""
     width, height = image.width, image.height
     x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
 
@@ -153,11 +201,14 @@ def _validate_and_crop(
         logger.info("Bbox covers %.1f%% of image, no meaningful crop", coverage * 100)
         return None
 
-    # Clamp to image bounds and crop
+    # Clamp to image bounds
     x1 = max(0, int(x1))
     y1 = max(0, int(y1))
     x2 = min(width, int(x2))
     y2 = min(height, int(y2))
+
+    # Enforce ~4:6 portrait aspect ratio
+    x1, y1, x2, y2 = _enforce_label_aspect(x1, y1, x2, y2, width, height)
 
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
