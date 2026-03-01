@@ -9,8 +9,8 @@
 #   sudo ./setup-virtual-printer.sh [PRINTER_NAME] [API_PORT]
 #
 # Examples:
-#   sudo ./setup-virtual-printer.sh                     # defaults: Zebra_LP2844, 8099
-#   sudo ./setup-virtual-printer.sh MyZebra 8099
+#   sudo ./setup-virtual-printer.sh                     # defaults: Zebra_LP2844, 8099, localhost
+#   sudo ./setup-virtual-printer.sh MyZebra 8099 homeassistant.local
 
 set -euo pipefail
 
