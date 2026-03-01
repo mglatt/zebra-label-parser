@@ -8,7 +8,7 @@ def prepare_label_image(
     image: Image.Image,
     width: int = 812,
     height: int = 1218,
-    dither: bool = True,
+    dither: bool = False,
     scale_pct: int = 100,
 ) -> Image.Image:
     """Resize, orient, and convert an image to a 1-bit monochrome label.
@@ -17,7 +17,7 @@ def prepare_label_image(
     - Resizes to fit within width x height preserving aspect ratio
     - scale_pct (50-100) shrinks the image within the label, adding margins
     - Pads shorter dimension with white
-    - Converts to 1-bit monochrome with optional Floyd-Steinberg dithering
+    - Converts to 1-bit monochrome (threshold by default, dithering optional)
     """
     img = image.convert("RGB")
 

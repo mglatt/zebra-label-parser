@@ -12,26 +12,22 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _EXTRACTION_PROMPT = """\
-Locate the shipping label in this image and return its bounding box.
+Locate the shipping label in this image and return its TIGHT bounding box.
 
-A shipping label is the rectangular region containing:
-- Delivery address and return address
-- Carrier barcodes (tracking barcode, routing barcode)
-- Carrier branding (UPS, FedEx, USPS, DHL)
+A shipping label is approximately 4x6 inches (portrait orientation — taller \
+than wide) and contains: delivery address, return address, carrier barcodes, \
+and carrier branding (UPS, FedEx, USPS, DHL).
 
-Common layouts you will encounter:
-- A full 8.5x11" page from USPS, FedEx, or UPS that contains the 4x6" \
-shipping label PLUS a receipt, customs form, or instructions. You MUST crop \
-to just the shipping label, excluding the receipt and instructions.
-- A standalone 4x6" shipping label with no surrounding content.
-- A photo of a shipping label on a package.
+IMPORTANT: The label is PORTRAIT (taller than wide). If you see a label region \
+that appears landscape (wider than tall), look more carefully — the actual \
+label is likely a portrait sub-region within it.
 
-For a typical full-page USPS or FedEx document, the shipping label is usually \
-in the upper-left quadrant, covering roughly the left 45-55% and top 50-60% \
-of the page.
+On full-page documents (8.5x11"), exclude everything that is NOT part of the \
+label: receipts, customs forms, instructions, fold lines, scissors icons. \
+Return ONLY the label itself.
 
-ALWAYS return the bounding box of the shipping label as percentages of the \
-image dimensions (0-100):
+Return the TIGHT bounding box as percentages of image dimensions (0-100). \
+The box should closely hug the label edges with minimal extra whitespace:
 
 {"x1_pct": <left>, "y1_pct": <top>, "x2_pct": <right>, "y2_pct": <bottom>}
 
