@@ -44,6 +44,7 @@ async def process_and_print(
     filename: str,
     settings: Settings,
     printer_name: str,
+    scale_pct: int = 100,
 ) -> dict:
     """Run the full pipeline: ingest → extract → process → ZPL → print."""
     stages: list[dict] = []
@@ -82,8 +83,9 @@ async def process_and_print(
             extracted,
             width=settings.label_width_px,
             height=settings.label_height_px,
+            scale_pct=scale_pct,
         )
-        stage("process", f"{label.width}x{label.height} mono")
+        stage("process", f"{label.width}x{label.height} mono @ {scale_pct}%")
 
         # 4. Generate ZPL (ASCII hex for maximum printer compatibility)
         zpl = image_to_zpl_ascii(label)

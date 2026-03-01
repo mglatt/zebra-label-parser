@@ -19,6 +19,17 @@
       <button id="refresh-btn" title="Refresh printer list">&circlearrowright;</button>
     </div>
 
+    <div class="printer-bar">
+      <label for="scale-select">Scale:</label>
+      <select id="scale-select">
+        <option value="100">100%</option>
+        <option value="95" selected>95%</option>
+        <option value="90">90%</option>
+        <option value="85">85%</option>
+        <option value="80">80%</option>
+      </select>
+    </div>
+
     <!-- State: idle / drop zone -->
     <div id="state-idle" class="state active">
       <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Upload a shipping label">

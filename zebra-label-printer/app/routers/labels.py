@@ -20,6 +20,7 @@ async def print_label(
     request: Request,
     file: UploadFile = File(...),
     printer: Optional[str] = Form(None),
+    scale: Optional[int] = Form(None),
 ):
     settings = request.app.state.settings
     printer_name = printer or settings.printer_name
@@ -31,11 +32,14 @@ async def print_label(
     if not contents:
         raise HTTPException(status_code=400, detail="Empty file")
 
+    scale_pct = max(50, min(100, scale)) if scale else 100
+
     result = await process_and_print(
         file_bytes=contents,
         filename=file.filename or "upload",
         settings=settings,
         printer_name=printer_name,
+        scale_pct=scale_pct,
     )
     return result
 

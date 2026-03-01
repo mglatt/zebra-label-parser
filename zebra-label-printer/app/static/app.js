@@ -14,6 +14,7 @@
   const dropZone = document.getElementById("drop-zone");
   const fileInput = document.getElementById("file-input");
   const printerSelect = document.getElementById("printer-select");
+  const scaleSelect = document.getElementById("scale-select");
   const refreshBtn = document.getElementById("refresh-btn");
   const stagesList = document.getElementById("stages");
   const resultIcon = document.getElementById("result-icon");
@@ -115,6 +116,7 @@
     const form = new FormData();
     form.append("file", file);
     form.append("printer", printer);
+    form.append("scale", scaleSelect.value);
 
     try {
       const res = await fetch(BASE + "/api/labels/print", { method: "POST", body: form });
