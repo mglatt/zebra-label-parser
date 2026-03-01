@@ -222,15 +222,10 @@ async def extract_label_region(
                         },
                     ],
                 },
-                # Prefill forces the model to emit JSON immediately
-                {
-                    "role": "assistant",
-                    "content": "{",
-                },
             ],
         )
 
-        reply = "{" + response.content[0].text
+        reply = response.content[0].text
         logger.info("Vision raw response: %s", reply)
 
         bbox = _parse_bbox(reply, image.width, image.height)
