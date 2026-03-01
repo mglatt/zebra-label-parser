@@ -20,6 +20,7 @@ except Exception:
     sys.exit(0)
 
 mapping = {
+    "api_key": "ZLP_API_KEY",
     "anthropic_api_key": "ZLP_ANTHROPIC_API_KEY",
     "printer_name": "ZLP_PRINTER_NAME",
     "claude_model": "ZLP_CLAUDE_MODEL",
