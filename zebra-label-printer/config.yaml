@@ -32,7 +32,7 @@ schema:
   label_height_inches: float?
   label_dpi: int?
 ports:
-  8099/tcp: 8099
+  8099/tcp: null
 ports_description:
   8099/tcp: Web UI
 map:

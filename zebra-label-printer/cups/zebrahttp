@@ -5,17 +5,17 @@
 # Permissions: root:root 0755
 #
 # Device URI format:
-#   zebrahttp://HOST:PORT/api/labels/print?printer=PRINTER_NAME&token=HA_TOKEN
+#   zebrahttp://HOST:PORT/api/labels/print?printer=PRINTER_NAME&api_key=KEY
 #
 # Examples:
-#   # Local server (no auth):
+#   # No auth:
 #   lpadmin -p ZebraLabel -E \
 #     -v "zebrahttp://localhost:8099/api/labels/print?printer=Zebra_LP2844" \
 #     -m raw -D "Zebra Shipping Label Printer" -L "Network"
 #
-#   # Remote Home Assistant (with auth token):
+#   # With API key:
 #   lpadmin -p ZebraLabel -E \
-#     -v "zebrahttp://homeassistant.local:8099/api/labels/print?printer=Zebra_LP2844&token=eyJ..." \
+#     -v "zebrahttp://homeassistant.local:8099/api/labels/print?printer=Zebra_LP2844&api_key=mykey" \
 #     -m raw -D "Zebra Shipping Label Printer" -L "Network"
 #
 # CUPS backend protocol:
@@ -51,10 +51,10 @@ if [[ "$QUERY" == *"printer="* ]]; then
     PRINTER="${PRINTER%%&*}"
 fi
 
-TOKEN=""
-if [[ "$QUERY" == *"token="* ]]; then
-    TOKEN="${QUERY#*token=}"
-    TOKEN="${TOKEN%%&*}"
+API_KEY=""
+if [[ "$QUERY" == *"api_key="* ]]; then
+    API_KEY="${QUERY#*api_key=}"
+    API_KEY="${API_KEY%%&*}"
 fi
 
 # Read from file argument or stdin
@@ -70,7 +70,7 @@ fi
 # Derive a filename from the job title
 FILENAME="${TITLE:-label}.pdf"
 
-echo "INFO: zebrahttp: Sending job $JOB_ID \"$TITLE\" to $URL_PATH (printer=$PRINTER${TOKEN:+, auth=yes})" >&2
+echo "INFO: zebrahttp: Sending job $JOB_ID \"$TITLE\" to $URL_PATH (printer=$PRINTER${API_KEY:+, auth=yes})" >&2
 
 # Build curl args (-sS: silent but show errors)
 CURL_ARGS=(-sS -w "%{http_code}" --connect-timeout 10 --max-time 60)
@@ -79,8 +79,8 @@ CURL_ARGS+=(-F "file=@${INPUT};filename=${FILENAME}")
 if [ -n "$PRINTER" ]; then
     CURL_ARGS+=(-F "printer=${PRINTER}")
 fi
-if [ -n "$TOKEN" ]; then
-    CURL_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
+if [ -n "$API_KEY" ]; then
+    CURL_ARGS+=(-H "X-API-Key: ${API_KEY}")
 fi
 
 # Capture HTTP status code on stdout (-w); curl errors (-S) go to CURL_LOG via stderr redirect;
