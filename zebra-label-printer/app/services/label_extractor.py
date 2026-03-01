@@ -161,11 +161,14 @@ def _validate_and_crop(
         logger.info("Bbox covers %.1f%% of image, no meaningful crop", coverage * 100)
         return None
 
-    # Clamp to image bounds
-    x1 = max(0, int(x1))
-    y1 = max(0, int(y1))
-    x2 = min(width, int(x2))
-    y2 = min(height, int(y2))
+    # Add safety margin to prevent edge content (barcodes) from being clipped.
+    # _trim_whitespace() in the image processor removes excess whitespace later.
+    margin_x = max(30, int(width * 0.015))
+    margin_y = max(30, int(height * 0.015))
+    x1 = max(0, int(x1) - margin_x)
+    y1 = max(0, int(y1) - margin_y)
+    x2 = min(width, int(x2) + margin_x)
+    y2 = min(height, int(y2) + margin_y)
 
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",

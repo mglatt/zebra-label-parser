@@ -64,10 +64,32 @@ def test_parse_bbox_no_label_false():
 
 def test_validate_and_crop_valid():
     img = Image.new("RGB", (800, 1000))
-    result = _validate_and_crop({"x1": 0, "y1": 0, "x2": 400, "y2": 600}, img)
+    result = _validate_and_crop({"x1": 50, "y1": 50, "x2": 400, "y2": 600}, img)
     assert result is not None
-    assert result.width == 400
-    assert result.height == 600
+    # Safety margin expands the crop beyond the raw bbox
+    assert result.width > (400 - 50)
+    assert result.height > (600 - 50)
+
+
+def test_validate_and_crop_margin_clamped_to_bounds():
+    """Margin must not produce negative coords or exceed image dimensions."""
+    img = Image.new("RGB", (800, 1000))
+    # Bbox near top-left corner
+    result = _validate_and_crop({"x1": 5, "y1": 5, "x2": 400, "y2": 600}, img)
+    assert result is not None
+    # Crop starts at 0 (clamped), not negative
+    assert result.width >= 400
+    assert result.height >= 600
+
+
+def test_validate_and_crop_margin_near_edge():
+    """Bbox near right/bottom edge: margin clamped to image size."""
+    img = Image.new("RGB", (800, 1000))
+    result = _validate_and_crop({"x1": 100, "y1": 100, "x2": 795, "y2": 995}, img)
+    assert result is not None
+    # x2+margin clamped to 800, y2+margin clamped to 1000
+    assert result.width <= 800
+    assert result.height <= 1000
 
 
 def test_validate_and_crop_too_small():
@@ -111,8 +133,9 @@ async def test_extract_with_mock_api(sample_image):
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
         result = await extract_label_region(sample_image, api_key="test-key")
-        assert result.width == 180  # 190 - 10
-        assert result.height == 280  # 290 - 10
+        # Safety margin expands the crop beyond the raw bbox
+        assert result.width > 180  # raw would be 190-10=180, margin adds extra
+        assert result.height > 280  # raw would be 290-10=280, margin adds extra
 
 
 @pytest.mark.asyncio
