@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  // Derive base path for API calls — works both standalone and behind HA ingress.
+  const BASE = window.location.pathname.replace(/\/$/, "");
+
   // Elements
   const stateIdle = document.getElementById("state-idle");
   const stateProcessing = document.getElementById("state-processing");
@@ -26,7 +29,7 @@
   // Printer list
   async function loadPrinters() {
     try {
-      const res = await fetch("/api/printers");
+      const res = await fetch(BASE + "/api/printers");
       const data = await res.json();
       printerSelect.innerHTML = "";
 
@@ -106,7 +109,7 @@
     form.append("printer", printer);
 
     try {
-      const res = await fetch("/api/labels/print", { method: "POST", body: form });
+      const res = await fetch(BASE + "/api/labels/print", { method: "POST", body: form });
       const data = await res.json();
 
       if (!res.ok) {
