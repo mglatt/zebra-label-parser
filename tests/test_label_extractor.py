@@ -84,12 +84,12 @@ def test_validate_and_crop_margin_clamped_to_bounds():
 
 def test_validate_and_crop_margin_near_edge():
     """Bbox near right/bottom edge: margin clamped to image size."""
-    img = Image.new("RGB", (800, 1000))
-    result = _validate_and_crop({"x1": 100, "y1": 100, "x2": 795, "y2": 995}, img)
+    img = Image.new("RGB", (800, 1200))
+    result = _validate_and_crop({"x1": 100, "y1": 100, "x2": 795, "y2": 1195}, img)
     assert result is not None
-    # x2+margin clamped to 800, y2+margin clamped to 1000
+    # x2+margin clamped to 800, y2+margin clamped to 1200
     assert result.width <= 800
-    assert result.height <= 1000
+    assert result.height <= 1200
 
 
 def test_validate_and_crop_too_small():
@@ -109,6 +109,30 @@ def test_validate_and_crop_out_of_bounds():
     img = Image.new("RGB", (200, 300))
     result = _validate_and_crop({"x1": -50, "y1": 0, "x2": 200, "y2": 300}, img)
     assert result is None
+
+
+def test_validate_and_crop_trims_too_square():
+    """A bbox with ratio < 1.3 is trimmed to ~1.5 (4×6 label proportions)."""
+    # Simulate a landscape label crop that's too tall (includes return auth slip).
+    # Bbox: 2000 wide × 1600 tall → ratio 1.25 (too square).
+    img = Image.new("RGB", (2550, 3300))
+    result = _validate_and_crop({"x1": 100, "y1": 800, "x2": 2100, "y2": 2400}, img)
+    assert result is not None
+    # After trimming: height should be reduced to ~2000/1.5 = 1333,
+    # plus safety margins. Result should be clearly less tall than the
+    # original 1600px bbox height + margins.
+    assert result.height < 1500
+
+
+def test_validate_and_crop_normal_ratio_untrimmed():
+    """A bbox with a normal label ratio (~1.5) is not trimmed."""
+    # Bbox: 2000 wide × 1333 tall → ratio 1.5 (correct for 6×4 label).
+    img = Image.new("RGB", (2550, 3300))
+    result = _validate_and_crop({"x1": 100, "y1": 800, "x2": 2100, "y2": 2133}, img)
+    assert result is not None
+    # Height should be the original bbox height + safety margins, not trimmed.
+    # Raw height = 1333, margin_y = max(30, ~49) ≈ 49, so result ≈ 1333 + 2*49 ≈ 1431.
+    assert result.height > 1350
 
 
 # --- extract_label_region tests ---
