@@ -4,17 +4,23 @@ Print shipping labels from any PDF or image to a Zebra thermal printer. Supports
 
 ## Setup
 
+### Home Assistant Addon
+
 1. Connect your Zebra printer to your network or via USB to the machine running CUPS
 2. Configure the printer in CUPS as a **raw** queue (usually at `http://your-cups-host:631`)
 3. Install this addon and set the **Printer Name** to match the CUPS queue name
 4. Optionally add an **Anthropic API Key** for smart label extraction from multi-page or cluttered PDFs
 5. Set an **API Key** in the addon settings to protect direct access to port 8099 (the sidebar is always accessible without it)
 
+### Standalone Docker
+
+If you're running outside Home Assistant, see the [README](../README.md#quick-start) for Docker Compose and `docker run` instructions. The same features are available — configure via `ZLP_` environment variables or a `.env` file instead of the addon UI.
+
 ## Usage
 
-### From the sidebar (simplest)
+### From the web UI (simplest)
 
-1. Open **Label Printer** from the HA sidebar
+1. Open **Label Printer** from the HA sidebar, or navigate to `http://your-host:8099` for standalone Docker
 2. Select your printer from the dropdown (status dot shows idle/processing/stopped)
 3. Optionally adjust the **scale** (50-100%) if labels print too large for the printable area
 4. Drag and drop a shipping label PDF or image

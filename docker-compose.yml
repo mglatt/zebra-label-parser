@@ -6,10 +6,17 @@ services:
     ports:
       - "8099:8099"
     environment:
+      - ZLP_API_KEY=${ZLP_API_KEY:-}
       - ZLP_ANTHROPIC_API_KEY=${ZLP_ANTHROPIC_API_KEY:-}
+      - ZLP_CLAUDE_MODEL=${ZLP_CLAUDE_MODEL:-}
       - ZLP_PRINTER_NAME=${ZLP_PRINTER_NAME:-}
       - ZLP_CUPS_SERVER=${ZLP_CUPS_SERVER:-}
+      - ZLP_LABEL_WIDTH_INCHES=${ZLP_LABEL_WIDTH_INCHES:-}
+      - ZLP_LABEL_HEIGHT_INCHES=${ZLP_LABEL_HEIGHT_INCHES:-}
+      - ZLP_LABEL_DPI=${ZLP_LABEL_DPI:-}
     volumes:
-      # Share host CUPS socket if available (alternative to running CUPS in container)
+      # Share host CUPS socket if CUPS runs on the same host.
+      # If your CUPS server is on another machine, remove this volume
+      # and set ZLP_CUPS_SERVER=hostname:631 in your .env instead.
       - /var/run/cups:/var/run/cups:ro
     restart: unless-stopped

@@ -29,34 +29,51 @@ A service that ingests shipping label PDFs or images, extracts the label using C
 5. Set your **Printer Name** (must match a CUPS queue on your network)
 6. Optionally add your **Anthropic API Key** for AI label extraction
 
-### Docker
+### Docker Compose
+
+The easiest way to run standalone. The included `docker-compose.yml` reads
+settings from a `.env` file:
 
 ```bash
 cp .env.example .env
-# Edit .env with your settings
-
+# Edit .env — set at least ZLP_PRINTER_NAME
 docker compose up --build
 ```
 
-### Docker (standalone)
+By default the compose file mounts the host's CUPS socket (`/var/run/cups`)
+so the container can talk to printers configured on the host. If your CUPS
+server is on a different machine, remove the volume mount and set
+`ZLP_CUPS_SERVER` in your `.env` instead:
+
+```env
+ZLP_CUPS_SERVER=192.168.1.50:631
+```
+
+### Docker (manual)
+
+If you'd rather run `docker run` directly:
 
 ```bash
 docker build -t zebra-label-parser zebra-label-printer/
-docker run -p 8099:8099 \
-  -e ZLP_ANTHROPIC_API_KEY=your-key \
-  -e ZLP_PRINTER_NAME=Zebra_LP2844 \
-  -e ZLP_CUPS_SERVER=your-cups-host:631 \
-  zebra-label-parser
-```
 
-If CUPS runs on the same host, mount the socket instead:
-
-```bash
-docker run -p 8099:8099 \
+# Option A: CUPS on the same host — mount the socket
+docker run -d --restart unless-stopped \
+  -p 8099:8099 \
   -e ZLP_PRINTER_NAME=Zebra_LP2844 \
   -v /var/run/cups:/var/run/cups:ro \
   zebra-label-parser
+
+# Option B: CUPS on another machine — point to it via env
+docker run -d --restart unless-stopped \
+  -p 8099:8099 \
+  -e ZLP_PRINTER_NAME=Zebra_LP2844 \
+  -e ZLP_CUPS_SERVER=192.168.1.50:631 \
+  zebra-label-parser
 ```
+
+Add `-e ZLP_ANTHROPIC_API_KEY=sk-...` for AI label extraction, or omit it
+to use the heuristic fallback. Add `-e ZLP_API_KEY=mysecret` to require
+authentication on the API.
 
 ### Local Development
 
@@ -82,14 +99,16 @@ Open http://localhost:8099 in your browser.
 
 ## Printing Methods
 
+All methods work with both the HA addon and standalone Docker deployments.
+
 | Method | Setup | Best For |
 |--------|-------|----------|
-| **Web UI** (sidebar) | None — built in | Quick one-off prints |
+| **Web UI** | None — built in | Quick one-off prints from a browser |
 | **iOS Shortcut** | One-time Shortcut setup | Printing from phone (Mail, Safari, Files) |
-| **Virtual CUPS printer** | `setup-virtual-printer.sh` | Printing from any Mac/Linux app |
-| **macOS Quick Action** | `install-quick-action.sh` | Right-click to print in Finder |
+| **Virtual CUPS printer** | `cups/setup-virtual-printer.sh` | Printing from any Mac/Linux app via system print dialog |
+| **macOS Quick Action** | `macos/install-quick-action.sh` | Right-click to print in Finder |
 | **Folder watcher** | HA automation + Samba | Household shared folder auto-print |
-| **Webhook API** | HTTP client | Automations and integrations |
+| **Webhook API** | HTTP client or `curl` | Automations and integrations |
 
 See [DOCS.md](zebra-label-printer/DOCS.md) for detailed setup instructions for each method.
 
