@@ -19,9 +19,13 @@ return address, carrier barcodes, and carrier branding (UPS, FedEx, USPS, DHL). 
 The label may be oriented portrait OR landscape on the page.
 
 On full-page documents (8.5x11"), the label is one section of the page. \
-Exclude everything that is NOT the label: receipts, customs forms, packing \
-slips, instructions, fold lines, scissors icons. Return ONLY the label itself \
-with a TIGHT bounding box.
+Exclude everything that is NOT the label: return authorization slips, return \
+slips, receipts, customs forms, packing slips, instructions, fold lines, \
+scissors icons, and any barcodes or text outside the label border. \
+If the label is enclosed by a dashed border or cut line, crop INSIDE those \
+lines. The bounding box should approximate the label's 4x6 inch proportions \
+(either portrait or landscape). Return ONLY the label itself with a TIGHT \
+bounding box.
 
 Return the bounding box as percentages of image dimensions (0-100):
 
@@ -160,6 +164,38 @@ def _validate_and_crop(
     if coverage > 0.90:
         logger.info("Bbox covers %.1f%% of image, no meaningful crop", coverage * 100)
         return None
+
+    # Trim bbox to approximate a 4×6" label aspect ratio (1.5:1).
+    # A ratio far from 1.5 likely means the crop includes content outside
+    # the label (e.g., a return authorization slip barcode below the label).
+    crop_w = x2 - x1
+    crop_h = y2 - y1
+    long_side = max(crop_w, crop_h)
+    short_side = min(crop_w, crop_h)
+    ratio = long_side / short_side if short_side > 0 else 0
+
+    _EXPECTED_RATIO = 1.5  # 4×6 label
+    _MIN_RATIO = 1.3
+    _MAX_RATIO = 2.2
+
+    if 0 < ratio < _MIN_RATIO:
+        # Too square — trim the longer dimension to ~1.5 ratio
+        if crop_w >= crop_h:
+            # Landscape: trim from bottom (return slips are typically below)
+            y2 = y1 + int(crop_w / _EXPECTED_RATIO)
+        else:
+            # Portrait: trim from right
+            x2 = x1 + int(crop_h / _EXPECTED_RATIO)
+        logger.info("Bbox ratio %.2f too square, trimmed to ~%.1f ratio", ratio, _EXPECTED_RATIO)
+    elif ratio > _MAX_RATIO:
+        # Too elongated — trim the longer dimension
+        if crop_w >= crop_h:
+            # Very wide: trim from right
+            x2 = x1 + int(crop_h * _EXPECTED_RATIO)
+        else:
+            # Very tall: trim from bottom
+            y2 = y1 + int(crop_w * _EXPECTED_RATIO)
+        logger.info("Bbox ratio %.2f too elongated, trimmed to ~%.1f ratio", ratio, _EXPECTED_RATIO)
 
     # Add safety margin to prevent edge content (barcodes) from being clipped.
     # _trim_whitespace() in the image processor removes excess whitespace later.
