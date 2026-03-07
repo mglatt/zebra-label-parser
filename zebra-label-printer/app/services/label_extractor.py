@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Optional
 
+import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -19,13 +20,21 @@ return address, carrier barcodes, and carrier branding (UPS, FedEx, USPS, DHL). 
 The label may be oriented portrait OR landscape on the page.
 
 On full-page documents (8.5x11"), the label is one section of the page. \
-Exclude everything that is NOT the label: return authorization slips, return \
-slips, receipts, customs forms, packing slips, instructions, fold lines, \
-scissors icons, and any barcodes or text outside the label border. \
-If the label is enclosed by a dashed border or cut line, crop INSIDE those \
-lines. The bounding box should approximate the label's 4x6 inch proportions \
-(either portrait or landscape). Return ONLY the label itself with a TIGHT \
-bounding box.
+Exclude everything that is NOT the label itself:
+- Return authorization slips, return slips, receipts, customs forms, \
+  packing slips, instructions, fold lines, scissors icons.
+- Any barcodes or text OUTSIDE the label border.
+- Section headings like "Return Mailing Label" or "Return Authorization Slip" \
+  that appear OUTSIDE or alongside the label.
+- Rotated text printed vertically along the edges of the label area \
+  (e.g., "Return Authorization Slip", "Return Mailing Label", or instruction \
+  text rotated 90 degrees). These are NOT part of the label.
+
+If the label is enclosed by a dashed border, cut line, or rectangular outline, \
+the bounding box must be STRICTLY INSIDE those lines. Do not include any \
+content outside the dashed rectangle, even if it is adjacent to the label. \
+The bounding box should approximate the label's 4x6 inch proportions \
+(either portrait or landscape).
 
 Return the bounding box as percentages of image dimensions (0-100):
 
@@ -130,6 +139,105 @@ def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
     return cropped
 
 
+def _tighten_to_content(image: Image.Image) -> Image.Image:
+    """Tighten a crop by detecting whitespace bands along the edges.
+
+    After the Vision API crops a region, there may still be extraneous
+    content separated from the actual label by a whitespace band (e.g.,
+    rotated "Return Authorization Slip" text alongside an Amazon return
+    label).  This function scans for predominantly-white columns/rows
+    near the edges and trims them away.
+
+    Only trims if a clear whitespace gap is found in the outer portion
+    of the image (outer 25% on each side).
+    """
+    arr = np.array(image.convert("L"))
+    h, w = arr.shape
+
+    # Minimum dimension — don't tighten tiny crops
+    if w < 200 or h < 200:
+        return image
+
+    # Threshold: pixels below this are "dark" (ink)
+    _DARK_THRESH = 200
+    # A column/row is "whitespace" if fewer than this fraction of pixels are dark
+    _WS_FRAC = 0.02
+    # Minimum width of a whitespace band to count as a gap (pixels)
+    _MIN_BAND = 8
+    # Only look in the outer portion of each edge
+    _EDGE_FRAC = 0.25
+
+    dark = arr < _DARK_THRESH  # boolean array: True where ink exists
+
+    # Column-wise dark pixel fraction
+    col_dark_frac = dark.mean(axis=0)  # shape (w,)
+    # Row-wise dark pixel fraction
+    row_dark_frac = dark.mean(axis=1)  # shape (h,)
+
+    def _find_inner_edge(dark_frac: np.ndarray, total: int, from_start: bool) -> int:
+        """Find the inner edge of a whitespace band near one side.
+
+        Scans from the given side inward.  If a whitespace band of at
+        least _MIN_BAND columns/rows is found, returns the position just
+        past the band (where content starts).  Otherwise returns 0 (start)
+        or total (end), meaning no trimming.
+        """
+        limit = int(total * _EDGE_FRAC)
+        if from_start:
+            indices = range(limit)
+        else:
+            indices = range(total - 1, total - 1 - limit, -1)
+
+        band_start = None
+        band_len = 0
+
+        for i in indices:
+            if dark_frac[i] < _WS_FRAC:
+                if band_start is None:
+                    band_start = i
+                band_len += 1
+            else:
+                if band_len >= _MIN_BAND:
+                    # Found a real gap — return the content side of it
+                    if from_start:
+                        return i  # first content column/row after the gap
+                    else:
+                        return i + 1  # content ends here (exclusive not needed, +1 to include)
+                band_start = None
+                band_len = 0
+
+        # Check if band extends to the edge
+        if band_len >= _MIN_BAND:
+            if from_start:
+                return band_start + band_len
+            else:
+                return band_start - band_len + 1 if band_start is not None else total
+
+        return 0 if from_start else total
+
+    new_x1 = _find_inner_edge(col_dark_frac, w, from_start=True)
+    new_x2 = _find_inner_edge(col_dark_frac, w, from_start=False)
+    new_y1 = _find_inner_edge(row_dark_frac, h, from_start=True)
+    new_y2 = _find_inner_edge(row_dark_frac, h, from_start=False)
+
+    # Only apply if we're actually trimming something meaningful
+    trimmed_w = new_x2 - new_x1
+    trimmed_h = new_y2 - new_y1
+    if trimmed_w < w * 0.5 or trimmed_h < h * 0.5:
+        # Would remove too much — skip tightening
+        logger.info("Tightening would remove >50%% of crop, skipping")
+        return image
+
+    if new_x1 > 0 or new_x2 < w or new_y1 > 0 or new_y2 < h:
+        logger.info(
+            "Tightened crop: x %d→%d, y %d→%d (was %dx%d, now %dx%d)",
+            new_x1, new_x2, new_y1, new_y2, w, h, trimmed_w, trimmed_h,
+        )
+        return image.crop((new_x1, new_y1, new_x2, new_y2))
+
+    return image
+
+
 def _validate_and_crop(
     bbox: dict, image: Image.Image
 ) -> Optional[Image.Image]:
@@ -209,6 +317,11 @@ def _validate_and_crop(
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
                 x1, y1, x2, y2, cropped.width, cropped.height, coverage * 100)
+
+    # Tighten the crop by detecting whitespace bands that separate the
+    # actual label content from extraneous text (e.g., rotated sidebar text).
+    cropped = _tighten_to_content(cropped)
+
     return cropped
 
 
