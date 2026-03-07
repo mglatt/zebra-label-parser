@@ -217,6 +217,7 @@ async def extract_label_region(
     api_key: Optional[str],
     model: str = "claude-sonnet-4-20250514",
     strict: bool = False,
+    usage_out: Optional[dict] = None,
 ) -> Optional[Image.Image]:
     """Use Claude Vision to find and crop the shipping label from an image.
 
@@ -270,6 +271,12 @@ async def extract_label_region(
                 },
             ],
         )
+
+        # Capture token usage for the caller
+        if usage_out is not None and hasattr(response, "usage"):
+            usage_out["input_tokens"] = response.usage.input_tokens
+            usage_out["output_tokens"] = response.usage.output_tokens
+            usage_out["model"] = model
 
         reply = response.content[0].text
         logger.info("Vision raw response: %s", reply)

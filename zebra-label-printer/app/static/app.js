@@ -24,6 +24,7 @@
   const previewContainer = document.getElementById("preview-container");
   const previewImage = document.getElementById("preview-image");
   const printerStatus = document.getElementById("printer-status");
+  const apiUsageEl = document.getElementById("api-usage");
 
   // Printer state cache: { printerName: "idle"|"processing"|"stopped"|"unknown" }
   let printerStates = {};
@@ -160,7 +161,7 @@
       const data = await res.json();
 
       if (!res.ok) {
-        showResult(false, data.detail || "Request failed", []);
+        showResult(false, data.detail || "Request failed", [], null, null);
         return;
       }
 
@@ -169,13 +170,34 @@
         data.success ? "Label sent to printer!" : (data.error || "Print failed"),
         data.stages || [],
         data.preview_base64 || null,
+        data.api_usage || null,
       );
     } catch (err) {
-      showResult(false, `Network error: ${err.message}`, []);
+      showResult(false, `Network error: ${err.message}`, [], null, null);
     }
   }
 
-  function showResult(success, message, stages, previewBase64) {
+  // Pricing per million tokens (USD) by model prefix
+  const MODEL_PRICING = {
+    "claude-sonnet":  { input: 3.0, output: 15.0 },
+    "claude-haiku":   { input: 1.0, output: 5.0 },
+    "claude-opus":    { input: 5.0, output: 25.0 },
+  };
+
+  function estimateCost(usage) {
+    if (!usage || !usage.model) return null;
+    const model = usage.model.toLowerCase();
+    let pricing = null;
+    for (const [prefix, p] of Object.entries(MODEL_PRICING)) {
+      if (model.includes(prefix.replace("claude-", ""))) { pricing = p; break; }
+    }
+    if (!pricing) return null;
+    const inputCost = (usage.input_tokens / 1_000_000) * pricing.input;
+    const outputCost = (usage.output_tokens / 1_000_000) * pricing.output;
+    return inputCost + outputCost;
+  }
+
+  function showResult(success, message, stages, previewBase64, apiUsage) {
     resultIcon.textContent = success ? "\u2705" : "\u274C";
     resultText.textContent = message;
     resultText.className = "result-text " + (success ? "success" : "error");
@@ -185,6 +207,21 @@
       previewContainer.style.display = "";
     } else {
       previewContainer.style.display = "none";
+    }
+
+    // API usage display
+    if (apiUsage && apiUsage.input_tokens) {
+      const totalTokens = apiUsage.input_tokens + apiUsage.output_tokens;
+      const cost = estimateCost(apiUsage);
+      let html = `<span class="usage-tokens">${totalTokens.toLocaleString()} tokens</span>`;
+      html += `<span class="usage-detail">${apiUsage.input_tokens.toLocaleString()} in / ${apiUsage.output_tokens.toLocaleString()} out</span>`;
+      if (cost !== null) {
+        html += `<span class="usage-cost">$${cost.toFixed(4)}</span>`;
+      }
+      apiUsageEl.innerHTML = html;
+      apiUsageEl.style.display = "";
+    } else {
+      apiUsageEl.style.display = "none";
     }
 
     renderStages(stages, doneStages);

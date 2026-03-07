@@ -226,6 +226,33 @@ h1 {
   background: #3a7bc8;
 }
 
+/* API usage */
+.api-usage {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  color: #888;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid #eee;
+}
+
+.api-usage .usage-tokens {
+  font-weight: 500;
+  color: #666;
+}
+
+.api-usage .usage-detail {
+  color: #aaa;
+}
+
+.api-usage .usage-cost {
+  font-weight: 600;
+  color: #4a90d9;
+}
+
 /* Preview */
 .preview-container {
   text-align: center;

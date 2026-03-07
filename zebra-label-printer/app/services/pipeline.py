@@ -57,6 +57,20 @@ async def process_and_print(
         logger.info("Stage: %s %s (%.2fs)", name, detail, elapsed)
 
     try:
+        # Track cumulative API token usage across all extraction calls
+        api_usage: dict = {}
+
+        def _usage_dict() -> dict:
+            """Return a fresh usage dict; totals are accumulated into api_usage."""
+            return {}
+
+        def _accumulate_usage(u: dict) -> None:
+            if not u:
+                return
+            api_usage["model"] = u.get("model", api_usage.get("model"))
+            api_usage["input_tokens"] = api_usage.get("input_tokens", 0) + u.get("input_tokens", 0)
+            api_usage["output_tokens"] = api_usage.get("output_tokens", 0) + u.get("output_tokens", 0)
+
         # 1. Detect file type and load/render image
         file_type = _detect_file_type(filename, file_bytes)
         stage("detect", f"type={file_type}")
@@ -69,11 +83,14 @@ async def process_and_print(
                 image = render_pdf_page(file_bytes, page=0, dpi=300)
                 stage("render", f"page 1 of 1, {image.width}x{image.height}")
 
+                usage = _usage_dict()
                 extracted = await extract_label_region(
                     image,
                     api_key=settings.anthropic_api_key,
                     model=settings.claude_model,
+                    usage_out=usage,
                 )
+                _accumulate_usage(usage)
                 if extracted is not image:
                     stage("extract", f"cropped to {extracted.width}x{extracted.height}")
                 else:
@@ -91,12 +108,15 @@ async def process_and_print(
                     stage("render", f"page {page_num + 1} of {page_count}, "
                           f"{page_image.width}x{page_image.height}")
 
+                    usage = _usage_dict()
                     result = await extract_label_region(
                         page_image,
                         api_key=settings.anthropic_api_key,
                         model=settings.claude_model,
                         strict=True,
+                        usage_out=usage,
                     )
+                    _accumulate_usage(usage)
                     if result is not None:
                         extracted = result
                         stage("extract", f"label found on page {page_num + 1}, "
@@ -109,23 +129,29 @@ async def process_and_print(
                     # page 0 with full heuristic fallbacks (same as before
                     # multi-page support existed).
                     logger.info("No label found on any page, falling back to page 1")
+                    usage = _usage_dict()
                     extracted = await extract_label_region(
                         page_0_image,
                         api_key=settings.anthropic_api_key,
                         model=settings.claude_model,
                         strict=False,
+                        usage_out=usage,
                     )
+                    _accumulate_usage(usage)
                     stage("extract", f"fallback to page 1, "
                           f"{extracted.width}x{extracted.height}")
         else:
             image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
             stage("load", f"{image.width}x{image.height}")
 
+            usage = _usage_dict()
             extracted = await extract_label_region(
                 image,
                 api_key=settings.anthropic_api_key,
                 model=settings.claude_model,
+                usage_out=usage,
             )
+            _accumulate_usage(usage)
             if extracted is not image:
                 stage("extract", f"cropped to {extracted.width}x{extracted.height}")
             else:
@@ -161,6 +187,7 @@ async def process_and_print(
             "stages": stages,
             "print_result": result,
             "preview_base64": preview_b64,
+            "api_usage": api_usage if api_usage else None,
             "total_time_s": round(time.monotonic() - t0, 2),
         }
 

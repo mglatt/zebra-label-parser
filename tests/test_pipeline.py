@@ -104,7 +104,7 @@ async def test_pipeline_multipage_finds_label(sample_multipage_pdf_bytes):
 
     call_count = 0
 
-    async def mock_extract(image, api_key, model, strict=False):
+    async def mock_extract(image, api_key, model, strict=False, **kwargs):
         nonlocal call_count
         call_count += 1
         if strict and call_count <= 1:
@@ -129,7 +129,7 @@ async def test_pipeline_multipage_fallback(sample_multipage_pdf_bytes):
     """Multi-page PDF: no label on any page → falls back to page 1 non-strict."""
     settings = Settings(anthropic_api_key="test-key", printer_name="TestPrinter")
 
-    async def mock_extract(image, api_key, model, strict=False):
+    async def mock_extract(image, api_key, model, strict=False, **kwargs):
         if strict:
             return None  # Strict: no label found on any page
         return image  # Non-strict fallback: return image as-is
