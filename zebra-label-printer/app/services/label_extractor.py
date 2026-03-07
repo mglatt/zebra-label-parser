@@ -148,8 +148,10 @@ def _tighten_to_content(image: Image.Image) -> Image.Image:
     label).  This function scans for predominantly-white columns/rows
     near the edges and trims them away.
 
-    Only trims if a clear whitespace gap is found in the outer portion
-    of the image (outer 25% on each side).
+    Only trims if a clear, truly empty whitespace gap is found in the
+    outer portion of the image (outer 15% on each side).  Thresholds are
+    deliberately strict to avoid trimming sparse-but-valid label content
+    like address text.
     """
     arr = np.array(image.convert("L"))
     h, w = arr.shape
@@ -160,12 +162,16 @@ def _tighten_to_content(image: Image.Image) -> Image.Image:
 
     # Threshold: pixels below this are "dark" (ink)
     _DARK_THRESH = 200
-    # A column/row is "whitespace" if fewer than this fraction of pixels are dark
-    _WS_FRAC = 0.02
-    # Minimum width of a whitespace band to count as a gap (pixels)
-    _MIN_BAND = 8
+    # A column/row is "whitespace" if fewer than this fraction of pixels are dark.
+    # Very strict: 0.3% — only truly empty columns/rows qualify.  Even a single
+    # character of address text pushes a column above this threshold.
+    _WS_FRAC = 0.003
+    # Minimum width of a whitespace band to count as a real gap (pixels).
+    # Must be wide enough to represent a genuine separation, not just normal
+    # spacing between text characters or lines.
+    _MIN_BAND = 20
     # Only look in the outer portion of each edge
-    _EDGE_FRAC = 0.25
+    _EDGE_FRAC = 0.15
 
     dark = arr < _DARK_THRESH  # boolean array: True where ink exists
 

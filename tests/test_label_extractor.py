@@ -143,38 +143,42 @@ def test_validate_and_crop_normal_ratio_untrimmed():
 def test_tighten_removes_sidebar_text():
     """Simulates an Amazon return label with rotated sidebar text.
 
-    Layout (600 wide x 400 tall):
-    - Columns 0-49: scattered dark pixels (rotated "Return Auth Slip" text)
-    - Columns 50-69: whitespace gap
-    - Columns 70-529: main label content (dense)
-    - Columns 530-549: whitespace gap
-    - Columns 550-599: scattered dark pixels (rotated "Return Mailing Label")
+    Layout (1000 wide x 700 tall):
+    - Columns 0-59: scattered dark pixels (rotated "Return Auth Slip" text)
+    - Columns 60-89: truly empty whitespace gap (30px wide, all white)
+    - Columns 90-909: main label content (dense)
+    - Columns 910-939: truly empty whitespace gap (30px wide, all white)
+    - Columns 940-999: scattered dark pixels (rotated "Return Mailing Label")
     """
-    img = Image.new("L", (600, 400), 255)
+    img = Image.new("L", (1000, 700), 255)
     arr = np.array(img)
 
-    # Left sidebar text: sparse dark pixels in columns 0-49
-    for col in range(0, 50):
-        for row in range(50, 350, 10):
+    # Left sidebar text: sparse dark pixels in columns 0-59
+    for col in range(0, 60):
+        for row in range(50, 650, 10):
             arr[row:row+3, col] = 0
 
-    # Main label content: dense dark pixels in columns 70-529
-    for col in range(70, 530):
-        for row in range(20, 380, 5):
+    # Columns 60-89: leave as white (the gap)
+
+    # Main label content: dense dark pixels in columns 90-909
+    for col in range(90, 910):
+        for row in range(20, 680, 5):
             arr[row:row+2, col] = 0
 
-    # Right sidebar text: sparse dark pixels in columns 550-599
-    for col in range(550, 600):
-        for row in range(50, 350, 10):
+    # Columns 910-939: leave as white (the gap)
+
+    # Right sidebar text: sparse dark pixels in columns 940-999
+    for col in range(940, 1000):
+        for row in range(50, 650, 10):
             arr[row:row+3, col] = 0
 
     img = Image.fromarray(arr)
     result = _tighten_to_content(img)
 
     # Should have trimmed the sidebars — width should be less than original
-    assert result.width < 560, f"Expected width < 560, got {result.width}"
-    # Main content (460 px) should be preserved
-    assert result.width >= 460, f"Expected width >= 460, got {result.width}"
+    assert result.width < 950, f"Expected width < 950, got {result.width}"
+    # Main content (820 px) should be preserved
+    assert result.width >= 820, f"Expected width >= 820, got {result.width}"
 
 
 def test_tighten_no_change_when_no_gaps():
@@ -199,31 +203,28 @@ def test_tighten_skips_small_images():
     assert result.height == 100
 
 
-def test_tighten_preserves_when_trim_too_aggressive():
-    """If tightening would remove >50% of the image, skip it.
+def test_tighten_preserves_sparse_content():
+    """Sparse address text should NOT be trimmed — it's valid label content.
 
-    Create an image where whitespace bands exist but trimming to them
-    would leave less than 50% of the original dimensions.
+    Simulates a label where the left side has sparse address text
+    (some dark pixels in each column) rather than a truly empty gap.
+    The tightening should NOT trim this area.
     """
-    img = Image.new("L", (400, 300), 255)
+    img = Image.new("L", (600, 400), 255)
     arr = np.array(img)
-    # Put sparse content only in a narrow vertical strip (cols 250-280)
-    # with wide whitespace on the left. The tightened width (280-0=280 at best)
-    # would be 70% of 400. But if content is only in cols 250-280 and
-    # there's a whitespace band from 0-249, tightening to col 250 would
-    # leave only 30 cols wide = 7.5% of 400 = too aggressive.
-    for col in range(250, 280):
-        for row in range(0, 300, 4):
+    # Left side: sparse text (like addresses) — 1-2% dark pixels per column
+    # This should NOT be treated as whitespace
+    for col in range(0, 150):
+        for row in range(30, 370, 50):
+            arr[row:row+4, col] = 0  # ~4/400 = 1% per column
+    # Right side: dense barcode content
+    for col in range(150, 600):
+        for row in range(10, 390, 5):
             arr[row:row+2, col] = 0
     img = Image.fromarray(arr)
     result = _tighten_to_content(img)
-    # Tightening would leave only ~30px wide (7.5%), so it should be skipped.
-    # But only the outer 25% is scanned, so cols 0-99 are checked.
-    # Since there's a whitespace band in cols 0-99, the left side gets
-    # trimmed to col 100 (end of scan range), giving 300px wide = 75%.
-    # That's > 50%, so trimming WILL happen on the left side.
-    # The key test: original should not be completely destroyed.
-    assert result.width >= 200  # at least 50% preserved
+    # Address columns have > 0.3% dark pixels, so they should NOT be trimmed
+    assert result.width == 600, f"Expected width 600 (no trim), got {result.width}"
 
 
 # --- extract_label_region tests ---
