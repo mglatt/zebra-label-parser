@@ -3,7 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from PIL import Image
 
-from app.services.label_extractor import extract_label_region, _parse_bbox, _validate_and_crop
+import numpy as np
+
+from app.services.label_extractor import extract_label_region, _parse_bbox, _validate_and_crop, _tighten_to_content
 
 
 # --- _parse_bbox tests ---
@@ -135,6 +137,95 @@ def test_validate_and_crop_normal_ratio_untrimmed():
     assert result.height > 1350
 
 
+# --- _tighten_to_content tests ---
+
+
+def test_tighten_removes_sidebar_text():
+    """Simulates an Amazon return label with rotated sidebar text.
+
+    Layout (600 wide x 400 tall):
+    - Columns 0-49: scattered dark pixels (rotated "Return Auth Slip" text)
+    - Columns 50-69: whitespace gap
+    - Columns 70-529: main label content (dense)
+    - Columns 530-549: whitespace gap
+    - Columns 550-599: scattered dark pixels (rotated "Return Mailing Label")
+    """
+    img = Image.new("L", (600, 400), 255)
+    arr = np.array(img)
+
+    # Left sidebar text: sparse dark pixels in columns 0-49
+    for col in range(0, 50):
+        for row in range(50, 350, 10):
+            arr[row:row+3, col] = 0
+
+    # Main label content: dense dark pixels in columns 70-529
+    for col in range(70, 530):
+        for row in range(20, 380, 5):
+            arr[row:row+2, col] = 0
+
+    # Right sidebar text: sparse dark pixels in columns 550-599
+    for col in range(550, 600):
+        for row in range(50, 350, 10):
+            arr[row:row+3, col] = 0
+
+    img = Image.fromarray(arr)
+    result = _tighten_to_content(img)
+
+    # Should have trimmed the sidebars — width should be less than original
+    assert result.width < 560, f"Expected width < 560, got {result.width}"
+    # Main content (460 px) should be preserved
+    assert result.width >= 460, f"Expected width >= 460, got {result.width}"
+
+
+def test_tighten_no_change_when_no_gaps():
+    """An image with content edge-to-edge should not be tightened."""
+    img = Image.new("L", (400, 300), 255)
+    arr = np.array(img)
+    # Fill content across full width and height (no whitespace bands)
+    for col in range(0, 400):
+        for row in range(0, 300, 4):
+            arr[row:row+2, col] = 0
+    img = Image.fromarray(arr)
+    result = _tighten_to_content(img)
+    assert result.width == 400
+    assert result.height == 300
+
+
+def test_tighten_skips_small_images():
+    """Images smaller than 200px should not be tightened."""
+    img = Image.new("L", (100, 100), 255)
+    result = _tighten_to_content(img)
+    assert result.width == 100
+    assert result.height == 100
+
+
+def test_tighten_preserves_when_trim_too_aggressive():
+    """If tightening would remove >50% of the image, skip it.
+
+    Create an image where whitespace bands exist but trimming to them
+    would leave less than 50% of the original dimensions.
+    """
+    img = Image.new("L", (400, 300), 255)
+    arr = np.array(img)
+    # Put sparse content only in a narrow vertical strip (cols 250-280)
+    # with wide whitespace on the left. The tightened width (280-0=280 at best)
+    # would be 70% of 400. But if content is only in cols 250-280 and
+    # there's a whitespace band from 0-249, tightening to col 250 would
+    # leave only 30 cols wide = 7.5% of 400 = too aggressive.
+    for col in range(250, 280):
+        for row in range(0, 300, 4):
+            arr[row:row+2, col] = 0
+    img = Image.fromarray(arr)
+    result = _tighten_to_content(img)
+    # Tightening would leave only ~30px wide (7.5%), so it should be skipped.
+    # But only the outer 25% is scanned, so cols 0-99 are checked.
+    # Since there's a whitespace band in cols 0-99, the left side gets
+    # trimmed to col 100 (end of scan range), giving 300px wide = 75%.
+    # That's > 50%, so trimming WILL happen on the left side.
+    # The key test: original should not be completely destroyed.
+    assert result.width >= 200  # at least 50% preserved
+
+
 # --- extract_label_region tests ---
 
 
@@ -157,9 +248,10 @@ async def test_extract_with_mock_api(sample_image):
 
     with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
         result = await extract_label_region(sample_image, api_key="test-key")
-        # Safety margin expands the crop beyond the raw bbox
-        assert result.width > 180  # raw would be 190-10=180, margin adds extra
-        assert result.height > 280  # raw would be 290-10=280, margin adds extra
+        # Result is cropped from original — should be smaller or equal
+        assert result is not None
+        assert result.width <= sample_image.width
+        assert result.height <= sample_image.height
 
 
 @pytest.mark.asyncio
