@@ -68,17 +68,27 @@ else
 fi
 
 # Derive a filename from the job title — preserve original extension if present,
-# otherwise default to .pdf.  Using .zpl when the input looks like ZPL prevents
-# the API from misdetecting it as a PDF.
+# otherwise detect the format from magic bytes.  Correct extensions prevent the
+# API from misdetecting the file type.
 FILENAME="${TITLE:-label}"
 case "$FILENAME" in
     *.*) ;; # already has extension
     *)
-        # Peek at the first bytes of the input to detect ZPL
-        HEAD=$(head -c 16 "$INPUT" 2>/dev/null || true)
+        # Peek at the first bytes of the input to detect format
+        HEAD=$(head -c 32 "$INPUT" 2>/dev/null || true)
         if echo "$HEAD" | grep -qiE '^\^XA|^\^FO|^\^CT'; then
             FILENAME="${FILENAME}.zpl"
+        elif echo "$HEAD" | grep -q '^%!PS'; then
+            # PostScript — macOS CUPS may send PS instead of PDF
+            FILENAME="${FILENAME}.ps"
+        elif echo "$HEAD" | grep -q '^%PDF'; then
+            FILENAME="${FILENAME}.pdf"
+        elif printf '%s' "$HEAD" | od -A n -t x1 -N 8 2>/dev/null | grep -q '89 50 4e 47'; then
+            FILENAME="${FILENAME}.png"
+        elif printf '%s' "$HEAD" | od -A n -t x1 -N 2 2>/dev/null | grep -q 'ff d8'; then
+            FILENAME="${FILENAME}.jpg"
         else
+            # Default to PDF — the API will sniff magic bytes as a fallback
             FILENAME="${FILENAME}.pdf"
         fi
         ;;

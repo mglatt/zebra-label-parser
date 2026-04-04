@@ -136,6 +136,7 @@ All settings use the `ZLP_` env prefix. See [.env.example](.env.example) for all
 | `ZLP_LABEL_DPI` | `203` | Printer resolution |
 | `ZLP_LABEL_WIDTH_INCHES` | `4.0` | Label width |
 | `ZLP_LABEL_HEIGHT_INCHES` | `6.0` | Label height |
+| `ZLP_LABEL_LEFT_OFFSET` | `28` | Left margin offset in dots (non-printable zone) |
 
 ## Printer Setup
 

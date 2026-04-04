@@ -75,19 +75,29 @@ cd cups/
 sudo ./setup-virtual-printer.sh Zebra_LP2844 homeassistant.local:8099 YOUR_API_KEY
 ```
 
-This installs the `zebrahttp` CUPS backend, creates a shared `ZebraLabel` print queue, and advertises it via Bonjour/mDNS.
+This installs the `zebrahttp` CUPS backend, creates a shared `ZebraLabel` print queue with a PPD that defines 4x6" as the default paper size, and advertises it via Bonjour/mDNS.
 
 **On the Mac:**
 
 The printer appears automatically in **System Settings → Printers & Scanners** (via Bonjour). Add it, and then print from any application — PDFs are sent to the addon, processed, and forwarded to the physical Zebra printer.
 
-If the virtual printer doesn't appear via Bonjour, add it manually:
+> **Important:** In the macOS print dialog, verify the **Paper Size** is set to
+> **4x6 Shipping Label** (not US Letter). The PPD provides this option
+> automatically. Using US Letter causes the label to be re-rendered onto a
+> full-size page, which can result in cropping or rotation on the physical label.
+> If you are printing a full-page document (8.5×11") that contains a label, select
+> US Letter instead — the pipeline will extract the label automatically.
+
+If the virtual printer doesn't appear via Bonjour, add it manually using the PPD:
 
 ```bash
 lpadmin -p ZebraLabel -E \
   -v "zebrahttp://homeassistant.local:8099/api/labels/print?printer=Zebra_LP2844&api_key=YOUR_KEY" \
-  -m raw -D "Zebra Shipping Label Printer" -L "Network"
+  -P cups/zebra-label.ppd \
+  -D "Zebra Shipping Label Printer" -L "Network"
 ```
+
+To upgrade an existing virtual printer (e.g., from a previous `-m raw` setup), re-run the setup script — it will update the queue in place.
 
 ### macOS Quick Action (right-click to print)
 
@@ -199,6 +209,7 @@ All settings are configurable from the HA addon UI. For Docker or local developm
 | Label Width | `ZLP_LABEL_WIDTH_INCHES` | `4.0` | Label width in inches |
 | Label Height | `ZLP_LABEL_HEIGHT_INCHES` | `6.0` | Label height in inches |
 | Label DPI | `ZLP_LABEL_DPI` | `203` | Printer resolution (203 is standard for Zebra) |
+| Left Offset | `ZLP_LABEL_LEFT_OFFSET` | `28` | Dots to shift content right (compensates for non-printable left margin) |
 
 ## Troubleshooting
 
@@ -214,6 +225,15 @@ Check the CUPS error log for details — the `zebrahttp` backend logs server-sid
 
 - Try reducing the **Scale** to 90% or 85% in the web UI
 - Verify your label dimensions match the physical media (4x6" is the default)
+- If the **left edge** is clipped (e.g., "TRK#" prints as "RK#"), increase
+  `ZLP_LABEL_LEFT_OFFSET` (default: 28 dots). Most Zebra printers have a
+  ~28-dot non-printable left margin.
+
+### Labels from the macOS virtual printer are rotated or cropped
+
+- Check the **Paper Size** in the macOS print dialog — it should be **4x6 Shipping Label**, not US Letter. If only US Letter appears, re-run `setup-virtual-printer.sh` to install the updated PPD.
+- Disable **Auto Rotate** in the macOS print dialog if the label appears rotated.
+- If you are printing a full-page (8.5×11") label PDF, select **US Letter** as the paper size — the pipeline will extract the 4×6" label automatically.
 
 ### No AI extraction (full page prints)
 

@@ -18,11 +18,11 @@ from app.services.zpl_generator import image_to_zpl_ascii
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif", ".webp"}
-_PDF_EXTENSIONS = {".pdf"}
+_PDF_EXTENSIONS = {".pdf", ".ps"}
 
 
 def _detect_file_type(filename: str, data: bytes) -> str:
-    """Detect whether the file is a PDF or image."""
+    """Detect whether the file is a PDF, PostScript, or image."""
     lower = filename.lower()
     for ext in _PDF_EXTENSIONS:
         if lower.endswith(ext):
@@ -33,6 +33,8 @@ def _detect_file_type(filename: str, data: bytes) -> str:
     # Sniff magic bytes
     if data[:5] == b"%PDF-":
         return "pdf"
+    if data[:4] == b"%!PS":
+        return "pdf"  # PyMuPDF handles PostScript via its PS interpreter
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image"
     if data[:2] in (b"\xff\xd8",):  # JPEG
