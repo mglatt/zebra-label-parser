@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     label_height_inches: float = 6.0
     label_dpi: int = 203
 
+    # Left offset in dots to avoid the printer's non-printable left margin.
+    # Most Zebra printers have a ~28-dot (~3.5mm) non-printable zone on the
+    # left edge.  Content placed at pixel 0 gets clipped.  This shifts all
+    # label content to the right by the specified number of dots.
+    label_left_offset: int = 28
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8099
@@ -66,6 +72,8 @@ class Settings(BaseSettings):
             self.label_height_inches = float(ha["label_height_inches"])
         if ha.get("label_dpi"):
             self.label_dpi = int(ha["label_dpi"])
+        if ha.get("label_left_offset") is not None:
+            self.label_left_offset = int(ha["label_left_offset"])
 
 
 def get_settings() -> Settings:

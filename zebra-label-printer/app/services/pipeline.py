@@ -163,6 +163,7 @@ async def process_and_print(
             width=settings.label_width_px,
             height=settings.label_height_px,
             scale_pct=scale_pct,
+            left_offset=settings.label_left_offset,
         )
         stage("process", f"{label.width}x{label.height} mono @ {scale_pct}%")
 
