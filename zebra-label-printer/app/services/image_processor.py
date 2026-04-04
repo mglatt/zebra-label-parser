@@ -47,6 +47,7 @@ def prepare_label_image(
     height: int = 1218,
     dither: bool = False,
     scale_pct: int = 100,
+    left_offset: int = 0,
 ) -> Image.Image:
     """Resize, orient, and convert an image to a 1-bit monochrome label.
 
@@ -54,6 +55,8 @@ def prepare_label_image(
     - Auto-rotates landscape images to portrait orientation
     - Resizes to fit within width x height preserving aspect ratio
     - scale_pct (50-100) shrinks the image within the label, adding margins
+    - left_offset shifts content right to avoid the printer's non-printable
+      left margin (typically ~28 dots on Zebra printers)
     - Pads shorter dimension with white
     - Converts to 1-bit monochrome (threshold by default, dithering optional)
     """
@@ -70,7 +73,9 @@ def prepare_label_image(
 
     # Apply scale — shrink the target area, image gets centered with margins
     s = max(50, min(100, scale_pct)) / 100.0
-    target_w = int(width * s)
+    # Reserve left_offset pixels so content avoids the non-printable left margin
+    usable_width = width - left_offset
+    target_w = int(usable_width * s)
     target_h = int(height * s)
 
     # Scale to fit within target dimensions, preserving aspect ratio
@@ -82,9 +87,9 @@ def prepare_label_image(
     # ZPL ^GF requires width in whole bytes (multiples of 8 pixels)
     padded_width = width if width % 8 == 0 else width + (8 - width % 8)
 
-    # Center on white canvas
+    # Center within usable area (shifted right by left_offset), then on canvas
     canvas = Image.new("RGB", (padded_width, height), (255, 255, 255))
-    offset_x = (padded_width - new_w) // 2
+    offset_x = left_offset + (usable_width - new_w) // 2
     offset_y = (height - new_h) // 2
     canvas.paste(img, (offset_x, offset_y))
 
