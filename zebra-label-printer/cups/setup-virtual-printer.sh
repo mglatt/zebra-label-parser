@@ -57,13 +57,26 @@ DEVICE_URI="zebrahttp://${API_URL}/api/labels/print?printer=${PRINTER_NAME}"
 if [ -n "$API_KEY" ]; then
     DEVICE_URI="${DEVICE_URI}&api_key=${API_KEY}"
 fi
-lpadmin -p "${QUEUE_NAME}" \
-    -E \
-    -v "${DEVICE_URI}" \
-    -m raw \
-    -D "Zebra Shipping Label Printer" \
-    -L "Network" \
-    -o printer-is-shared=true
+PPD_FILE="${SCRIPT_DIR}/zebra-label.ppd"
+if [ -f "$PPD_FILE" ]; then
+    echo "  Using PPD: ${PPD_FILE}"
+    lpadmin -p "${QUEUE_NAME}" \
+        -E \
+        -v "${DEVICE_URI}" \
+        -P "${PPD_FILE}" \
+        -D "Zebra Shipping Label Printer" \
+        -L "Network" \
+        -o printer-is-shared=true
+else
+    echo "  Warning: PPD not found at ${PPD_FILE}, falling back to raw mode"
+    lpadmin -p "${QUEUE_NAME}" \
+        -E \
+        -v "${DEVICE_URI}" \
+        -m raw \
+        -D "Zebra Shipping Label Printer" \
+        -L "Network" \
+        -o printer-is-shared=true
+fi
 echo "  Device URI: ${DEVICE_URI%%&api_key=*}"
 
 # Step 3: Enable printer sharing

@@ -1,0 +1,63 @@
+*PPD-Adobe: "4.3"
+*% PPD file for the Zebra Label Printer virtual CUPS queue.
+*% Defines 4x6" as the default paper size so macOS renders documents
+*% at the correct label dimensions instead of US Letter.
+*FormatVersion: "4.3"
+*FileVersion: "1.0"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*Manufacturer: "Zebra"
+*ModelName: "Zebra Label Printer"
+*ShortNickName: "Zebra Label Printer"
+*NickName: "Zebra Label Printer (zebrahttp)"
+*PCFileName: "ZEBRALAB.PPD"
+*Product: "(Zebra Label Printer)"
+*PSVersion: "(3010) 0"
+*LanguageLevel: "3"
+*ColorDevice: False
+*DefaultColorSpace: Gray
+*FileSystem: False
+*Throughput: "1"
+
+*% Accept PDF input and pass it through to the backend unmodified.
+*cupsFilter: "application/pdf 0 -"
+*cupsFilter: "image/jpeg 0 -"
+*cupsFilter: "image/png 0 -"
+
+*% ---- Paper Sizes ----
+*% Default is 4x6" shipping label.  US Letter is available for full-page
+*% label documents that the pipeline will crop automatically.
+
+*OpenUI *PageSize/Paper Size: PickOne
+*OrderDependency: 10 AnySetup *PageSize
+*DefaultPageSize: 4x6
+*PageSize 4x6/4x6 Shipping Label: "<</PageSize[288 432]/ImagingBBox null>>setpagedevice"
+*PageSize 4x6.5/4x6.5 Label: "<</PageSize[288 468]/ImagingBBox null>>setpagedevice"
+*PageSize Letter/US Letter: "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageSize
+
+*OpenUI *PageRegion/Page Region: PickOne
+*OrderDependency: 10 AnySetup *PageRegion
+*DefaultPageRegion: 4x6
+*PageRegion 4x6/4x6 Shipping Label: "<</PageSize[288 432]/ImagingBBox null>>setpagedevice"
+*PageRegion 4x6.5/4x6.5 Label: "<</PageSize[288 468]/ImagingBBox null>>setpagedevice"
+*PageRegion Letter/US Letter: "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageRegion
+
+*DefaultImageableArea: 4x6
+*ImageableArea 4x6/4x6 Shipping Label: "0 0 288 432"
+*ImageableArea 4x6.5/4x6.5 Label: "0 0 288 468"
+*ImageableArea Letter/US Letter: "0 0 612 792"
+
+*DefaultPaperDimension: 4x6
+*PaperDimension 4x6/4x6 Shipping Label: "288 432"
+*PaperDimension 4x6.5/4x6.5 Label: "288 468"
+*PaperDimension Letter/US Letter: "612 792"
+
+*% ---- Resolution ----
+*OpenUI *Resolution/Resolution: PickOne
+*OrderDependency: 20 AnySetup *Resolution
+*DefaultResolution: 203dpi
+*Resolution 203dpi/203 DPI (Standard): "<</HWResolution[203 203]>>setpagedevice"
+*Resolution 300dpi/300 DPI (High): "<</HWResolution[300 300]>>setpagedevice"
+*CloseUI: *Resolution

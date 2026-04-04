@@ -18,9 +18,10 @@
     <txt-record>Transparent=T</txt-record>
     <txt-record>URF=none</txt-record>
     <txt-record>rp=printers/ZebraLabel</txt-record>
-    <txt-record>pdl=application/pdf,image/jpeg,image/png</txt-record>
+    <txt-record>pdl=application/pdf,application/postscript,image/jpeg,image/png</txt-record>
     <txt-record>product=(Zebra Label Printer)</txt-record>
     <txt-record>printer-state=3</txt-record>
-    <txt-record>note=Zebra Thermal Shipping Labels</txt-record>
+    <txt-record>media-ready=custom_4x6in_4x6in</txt-record>
+    <txt-record>note=Zebra Thermal Shipping Labels (4x6)</txt-record>
   </service>
 </service-group>
