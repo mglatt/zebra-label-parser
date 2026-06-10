@@ -1,4 +1,4 @@
-from app.services.pdf_renderer import get_page_count, render_pdf_page
+from app.services.pdf_renderer import get_page_count, get_page_size_inches, render_pdf_page
 
 
 def test_render_pdf_page(sample_pdf_bytes):
@@ -24,3 +24,15 @@ def test_render_invalid_page(sample_pdf_bytes):
     import pytest
     with pytest.raises(ValueError, match="does not exist"):
         render_pdf_page(sample_pdf_bytes, page=5)
+
+
+def test_get_page_size_inches(sample_pdf_bytes):
+    w, h = get_page_size_inches(sample_pdf_bytes, page=0)
+    assert abs(w - 4.0) < 0.01
+    assert abs(h - 6.0) < 0.01
+
+
+def test_get_page_size_inches_invalid_page(sample_pdf_bytes):
+    import pytest
+    with pytest.raises(ValueError, match="does not exist"):
+        get_page_size_inches(sample_pdf_bytes, page=5)

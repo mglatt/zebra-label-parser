@@ -61,6 +61,32 @@ def test_parse_bbox_no_label_false():
     assert result is None  # no_label=false, and no bbox keys
 
 
+def test_parse_bbox_clamps_pct_overshoot():
+    """Slightly out-of-range percentages are clamped, not rejected."""
+    text = '{"x1_pct": -5, "y1_pct": 2, "x2_pct": 105, "y2_pct": 99}'
+    result = _parse_bbox(text, 1000, 1000)
+    assert result is not None
+    assert result["x1"] == 0
+    assert result["x2"] == 1000
+    assert result["y2"] <= 1000
+
+
+def test_parse_bbox_fractional_pct():
+    """0-1 fractional coordinates are rescaled to percentages."""
+    text = '{"x1_pct": 0.05, "y1_pct": 0.1, "x2_pct": 0.8, "y2_pct": 0.95}'
+    result = _parse_bbox(text, 1000, 1000)
+    assert result is not None
+    assert result["x1"] == 50
+    assert result["y1"] == 100
+    assert result["x2"] == 800
+    assert result["y2"] == 950
+
+
+def test_parse_bbox_non_numeric():
+    text = '{"x1_pct": "left", "y1_pct": 0, "x2_pct": 80, "y2_pct": 95}'
+    assert _parse_bbox(text, 1000, 1000) is None
+
+
 # --- _validate_and_crop tests ---
 
 
@@ -107,23 +133,70 @@ def test_validate_and_crop_inverted():
     assert result is None
 
 
-def test_validate_and_crop_out_of_bounds():
+def test_validate_and_crop_out_of_bounds_clamped():
+    """Out-of-bounds coords are clamped to the image, not rejected.
+
+    After clamping, this bbox covers the full frame, so the original
+    image is returned whole.
+    """
     img = Image.new("RGB", (200, 300))
     result = _validate_and_crop({"x1": -50, "y1": 0, "x2": 200, "y2": 300}, img)
-    assert result is None
+    assert result is img
 
 
-def test_validate_and_crop_trims_too_square():
-    """A bbox with ratio < 1.3 is trimmed to ~1.5 (4×6 label proportions)."""
-    # Simulate a landscape label crop that's too tall (includes return auth slip).
-    # Bbox: 2000 wide × 1600 tall → ratio 1.25 (too square).
-    img = Image.new("RGB", (2550, 3300))
+def test_validate_and_crop_full_coverage_returns_image():
+    """A bbox covering >90% of the image means the image IS the label."""
+    img = Image.new("RGB", (800, 1200), (255, 255, 255))
+    result = _validate_and_crop({"x1": 0, "y1": 0, "x2": 800, "y2": 1200}, img)
+    assert result is img
+
+
+def test_validate_and_crop_trims_too_square_at_whitespace():
+    """A too-square bbox is trimmed back to ~1.5 ratio along a clean
+    whitespace line, excluding the return slip below the label."""
+    # White letter page with a dense landscape label block and a separate
+    # slip block below it, divided by a whitespace gap.
+    arr = np.full((3300, 2550), 255, dtype=np.uint8)
+    arr[850:2100, 150:2050] = 0  # label: 1900x1250 (~1.52 ratio)
+    arr[2200:2380, 150:2050] = 0  # return slip below the gap
+    img = Image.fromarray(arr)
+
+    # Bbox spans label + slip: 2000x1600 → ratio 1.25 (too square)
     result = _validate_and_crop({"x1": 100, "y1": 800, "x2": 2100, "y2": 2400}, img)
     assert result is not None
-    # After trimming: height should be reduced to ~2000/1.5 = 1333,
-    # plus safety margins. Result should be clearly less tall than the
-    # original 1600px bbox height + margins.
-    assert result.height < 1500
+    # Trimmed at the gap: slip excluded, label fully preserved
+    assert result.height < 1450, f"Expected slip trimmed, got height {result.height}"
+    assert result.height >= 1200, f"Expected full label kept, got height {result.height}"
+    assert result.width >= 1850, f"Expected full label width, got {result.width}"
+
+
+def test_validate_and_crop_no_trim_without_clean_cut():
+    """A too-square bbox over dense content is NOT trimmed — cutting would
+    slice through label content (e.g. a barcode)."""
+    arr = np.full((3300, 2550), 255, dtype=np.uint8)
+    arr[800:2400, 100:2100] = 0  # dense content fills the whole bbox
+    img = Image.fromarray(arr)
+
+    result = _validate_and_crop({"x1": 100, "y1": 800, "x2": 2100, "y2": 2400}, img)
+    assert result is not None
+    # No clean cut line exists → full 1600px of content must be preserved
+    assert result.height >= 1590, f"Content was sliced: height {result.height}"
+
+
+def test_validate_and_crop_expands_to_uncovered_barcode():
+    """A bbox whose bottom edge slices through a barcode is grown until the
+    edge sits on whitespace, recovering the clipped barcode."""
+    arr = np.full((1400, 1000), 255, dtype=np.uint8)
+    arr[200:880, 200:800] = 0    # address/content block
+    arr[900:1050, 200:800] = 0   # tracking barcode at the bottom
+    img = Image.fromarray(arr)
+
+    # Bbox bottom edge (950) cuts through the barcode (900-1050)
+    result = _validate_and_crop({"x1": 200, "y1": 200, "x2": 800, "y2": 950}, img)
+    assert result is not None
+    # Full content span is 200..1050 = 850px; without expansion the crop
+    # would only reach ~970px from y=180 (≈790 of content).
+    assert result.height >= 840, f"Barcode still clipped: height {result.height}"
 
 
 def test_validate_and_crop_normal_ratio_untrimmed():
@@ -253,6 +326,26 @@ async def test_extract_with_mock_api(sample_image):
         assert result is not None
         assert result.width <= sample_image.width
         assert result.height <= sample_image.height
+
+
+@pytest.mark.asyncio
+async def test_extract_retries_after_transient_error(sample_image):
+    """A single transient API failure is retried instead of degrading to
+    the heuristic fallback."""
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text='{"x1": 10, "y1": 10, "x2": 190, "y2": 290}')]
+
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        side_effect=[Exception("transient"), mock_response]
+    )
+    mock_anthropic = MagicMock()
+    mock_anthropic.AsyncAnthropic.return_value = mock_client
+
+    with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+        result = await extract_label_region(sample_image, api_key="test-key")
+        assert result is not None
+        assert mock_client.messages.create.call_count == 2
 
 
 @pytest.mark.asyncio

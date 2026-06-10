@@ -11,7 +11,7 @@ from PIL import Image
 from app.config import Settings
 from app.services.image_processor import prepare_label_image
 from app.services.label_extractor import extract_label_region
-from app.services.pdf_renderer import get_page_count, render_pdf_page
+from app.services.pdf_renderer import get_page_count, get_page_size_inches, render_pdf_page
 from app.services.print_service import print_zpl
 from app.services.zpl_generator import image_to_zpl_ascii
 
@@ -40,6 +40,19 @@ def _detect_file_type(filename: str, data: bytes) -> str:
     if data[:2] in (b"\xff\xd8",):  # JPEG
         return "image"
     return "image"  # default to image, PIL will error if it's not
+
+
+def _is_label_sized_page(width_in: float, height_in: float) -> bool:
+    """True when a PDF page is already thermal-label stock.
+
+    Carrier-generated thermal PDFs (UPS, FedEx, USPS, DHL, Amazon, …) use
+    pages cut to the label itself — 4x6", 4x6.75", or 4x8" doc-tab stock.
+    Such pages ARE the label, so they should be used whole rather than
+    risking a Vision crop that frames only part of them.  Thermal stock is
+    at most ~4" across; a letter page (8.5x11") never qualifies.
+    """
+    short, long_ = sorted((width_in, height_in))
+    return 0 < short <= 4.6 and long_ <= 8.5
 
 
 async def process_and_print(
@@ -85,18 +98,25 @@ async def process_and_print(
                 image = render_pdf_page(file_bytes, page=0, dpi=300)
                 stage("render", f"page 1 of 1, {image.width}x{image.height}")
 
-                usage = _usage_dict()
-                extracted = await extract_label_region(
-                    image,
-                    api_key=settings.anthropic_api_key,
-                    model=settings.claude_model,
-                    usage_out=usage,
-                )
-                _accumulate_usage(usage)
-                if extracted is not image:
-                    stage("extract", f"cropped to {extracted.width}x{extracted.height}")
+                w_in, h_in = get_page_size_inches(file_bytes, page=0)
+                if _is_label_sized_page(w_in, h_in):
+                    # The page IS the label (carrier thermal PDF) — use it
+                    # whole; no crop can frame it better.
+                    extracted = image
+                    stage("extract", f"label-sized page ({w_in:.2g}x{h_in:.2g}\"), used in full")
                 else:
-                    stage("extract", "full page (no crop)")
+                    usage = _usage_dict()
+                    extracted = await extract_label_region(
+                        image,
+                        api_key=settings.anthropic_api_key,
+                        model=settings.claude_model,
+                        usage_out=usage,
+                    )
+                    _accumulate_usage(usage)
+                    if extracted is not image:
+                        stage("extract", f"cropped to {extracted.width}x{extracted.height}")
+                    else:
+                        stage("extract", "full page (no crop)")
             else:
                 # Multi-page PDF — scan pages for the first label
                 logger.info("Multi-page PDF: scanning %d page(s)", page_count)
@@ -109,6 +129,16 @@ async def process_and_print(
                         page_0_image = page_image
                     stage("render", f"page {page_num + 1} of {page_count}, "
                           f"{page_image.width}x{page_image.height}")
+
+                    w_in, h_in = get_page_size_inches(file_bytes, page=page_num)
+                    if _is_label_sized_page(w_in, h_in):
+                        # A label-sized page inside a multi-page document is
+                        # the label itself (instructions/receipts are letter
+                        # size) — use it whole.
+                        extracted = page_image
+                        stage("extract", f"label-sized page {page_num + 1} "
+                              f"({w_in:.2g}x{h_in:.2g}\"), used in full")
+                        break
 
                     usage = _usage_dict()
                     result = await extract_label_region(

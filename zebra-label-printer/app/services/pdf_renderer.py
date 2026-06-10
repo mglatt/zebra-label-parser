@@ -28,3 +28,15 @@ def get_page_count(pdf_bytes: bytes) -> int:
     count = len(doc)
     doc.close()
     return count
+
+
+def get_page_size_inches(pdf_bytes: bytes, page: int = 0) -> tuple[float, float]:
+    """Return the (width, height) of a PDF page in inches."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    count = len(doc)
+    if page >= count:
+        doc.close()
+        raise ValueError(f"Page {page} does not exist (document has {count} pages)")
+    rect = doc[page].rect
+    doc.close()
+    return rect.width / 72.0, rect.height / 72.0

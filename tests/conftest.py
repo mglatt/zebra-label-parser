@@ -65,6 +65,24 @@ def sample_multipage_pdf_bytes() -> bytes:
 
 
 @pytest.fixture
+def letter_multipage_pdf_bytes() -> bytes:
+    """A 2-page PDF where every page is letter size (no label-sized page)."""
+    doc = fitz.open()
+
+    p0 = doc.new_page(width=612, height=792)
+    p0.insert_text((72, 100), "INSTRUCTIONS", fontsize=18)
+    p0.insert_text((72, 140), "1. Print the label", fontsize=12)
+
+    p1 = doc.new_page(width=612, height=792)
+    p1.insert_text((72, 100), "ORDER RECEIPT", fontsize=18)
+    p1.insert_text((72, 140), "Item: Widget x1", fontsize=12)
+
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+@pytest.fixture
 def mono_image() -> Image.Image:
     """A small 16x8 monochrome test image for ZPL testing."""
     img = Image.new("1", (16, 8), color=1)  # all white

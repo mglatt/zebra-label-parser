@@ -4,7 +4,7 @@ import pytest
 from PIL import Image
 
 from app.config import Settings
-from app.services.pipeline import process_and_print, _detect_file_type
+from app.services.pipeline import process_and_print, _detect_file_type, _is_label_sized_page
 
 
 def test_detect_pdf_by_extension():
@@ -22,6 +22,55 @@ def test_detect_pdf_by_magic():
 
 def test_detect_png_by_magic():
     assert _detect_file_type("unknown", b"\x89PNG\r\n\x1a\n...") == "image"
+
+
+def test_is_label_sized_page():
+    assert _is_label_sized_page(4.0, 6.0) is True   # standard 4x6 thermal
+    assert _is_label_sized_page(6.0, 4.0) is True   # landscape
+    assert _is_label_sized_page(4.0, 8.0) is True   # 4x8 doc-tab stock
+    assert _is_label_sized_page(8.5, 11.0) is False  # letter page
+    assert _is_label_sized_page(8.5, 5.5) is False   # half letter
+    assert _is_label_sized_page(8.27, 11.69) is False  # A4
+
+
+@pytest.mark.asyncio
+async def test_pipeline_label_sized_pdf_skips_vision(sample_pdf_bytes):
+    """A 4x6 PDF page IS the label — Vision must not be called, the page is
+    used whole."""
+    settings = Settings(anthropic_api_key="test-key", printer_name="TestPrinter")
+
+    with patch("app.services.pipeline.extract_label_region") as mock_extract, \
+         patch("app.services.pipeline.print_zpl") as mock_print:
+        mock_print.return_value = {"success": True, "job_id": 9, "printer": "TestPrinter"}
+
+        result = await process_and_print(sample_pdf_bytes, "label.pdf", settings, "TestPrinter")
+
+        assert result["success"] is True
+        mock_extract.assert_not_called()
+        extract_stages = [s for s in result["stages"] if s["name"] == "extract"]
+        assert any("used in full" in s["detail"] for s in extract_stages)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_multipage_label_sized_page_used_whole(sample_multipage_pdf_bytes):
+    """In a multi-page PDF, a label-sized page short-circuits the strict
+    Vision scan and is used whole."""
+    settings = Settings(anthropic_api_key="test-key", printer_name="TestPrinter")
+
+    async def mock_extract(image, api_key, model, strict=False, **kwargs):
+        return None  # letter pages: no label
+
+    with patch("app.services.pipeline.extract_label_region", side_effect=mock_extract), \
+         patch("app.services.pipeline.print_zpl") as mock_print:
+        mock_print.return_value = {"success": True, "job_id": 10, "printer": "TestPrinter"}
+
+        result = await process_and_print(
+            sample_multipage_pdf_bytes, "multipage.pdf", settings, "TestPrinter"
+        )
+
+        assert result["success"] is True
+        extract_stages = [s for s in result["stages"] if s["name"] == "extract"]
+        assert any("label-sized page 2" in s["detail"] for s in extract_stages)
 
 
 @pytest.mark.asyncio
@@ -125,8 +174,9 @@ async def test_pipeline_multipage_finds_label(sample_multipage_pdf_bytes):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_multipage_fallback(sample_multipage_pdf_bytes):
-    """Multi-page PDF: no label on any page → falls back to page 1 non-strict."""
+async def test_pipeline_multipage_fallback(letter_multipage_pdf_bytes):
+    """Multi-page PDF (all letter pages): no label found → falls back to
+    page 1 non-strict."""
     settings = Settings(anthropic_api_key="test-key", printer_name="TestPrinter")
 
     async def mock_extract(image, api_key, model, strict=False, **kwargs):
@@ -139,7 +189,7 @@ async def test_pipeline_multipage_fallback(sample_multipage_pdf_bytes):
         mock_print.return_value = {"success": True, "job_id": 5, "printer": "TestPrinter"}
 
         result = await process_and_print(
-            sample_multipage_pdf_bytes, "multipage.pdf", settings, "TestPrinter"
+            letter_multipage_pdf_bytes, "multipage.pdf", settings, "TestPrinter"
         )
 
         assert result["success"] is True
