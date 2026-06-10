@@ -5,7 +5,23 @@ from PIL import Image
 
 import numpy as np
 
-from app.services.label_extractor import extract_label_region, _parse_bbox, _validate_and_crop, _tighten_to_content
+from app.services.label_extractor import (
+    extract_label_region,
+    _content_fills_label_frame,
+    _parse_bbox,
+    _tighten_to_content,
+    _validate_and_crop,
+)
+
+
+def _bare_label_image(width=1800, height=1200):
+    """A bare landscape label: ink spans nearly the full frame, including a
+    rotated address column on the left (UPS/Amazon return label layout).
+    Text/barcode lines are drawn sparsely — real labels are mostly white."""
+    arr = np.full((height, width), 255, dtype=np.uint8)
+    arr[40:1160:6, 40:480] = 0     # rotated address column (left ~25%)
+    arr[40:1160:4, 520:1760] = 0   # barcodes / tracking / MaxiCode area
+    return Image.fromarray(arr)
 
 
 # --- _parse_bbox tests ---
@@ -300,7 +316,81 @@ def test_tighten_preserves_sparse_content():
     assert result.width == 600, f"Expected width 600 (no trim), got {result.width}"
 
 
+# --- _content_fills_label_frame tests ---
+
+
+def test_content_fills_label_frame_bare_label():
+    assert _content_fills_label_frame(_bare_label_image()) is True
+
+
+def test_content_fills_label_frame_letter_page():
+    """A letter-proportioned page never qualifies, even when full of ink."""
+    arr = np.zeros((3300, 2550), dtype=np.uint8)
+    assert _content_fills_label_frame(Image.fromarray(arr)) is False
+
+
+def test_content_fills_label_frame_label_on_page_section():
+    """Label-ratio frame but content in only one corner → not a bare label."""
+    arr = np.full((1200, 1800), 255, dtype=np.uint8)
+    arr[100:500, 100:700] = 0
+    assert _content_fills_label_frame(Image.fromarray(arr)) is False
+
+
+def test_content_fills_label_frame_dark_photo():
+    """A mostly-dark image (photo on dark background) must go through Vision."""
+    arr = np.full((1200, 1800), 30, dtype=np.uint8)
+    assert _content_fills_label_frame(Image.fromarray(arr)) is False
+
+
+# --- _expand_into_ink (via _validate_and_crop) tests ---
+
+
+def test_validate_and_crop_recovers_rotated_address_column():
+    """Reproduces the UPS/Amazon return label failure: Vision excludes the
+    rotated address column, leaving a too-square bbox.  The bbox must grow
+    back into the adjacent ink so the address block is framed."""
+    # Letter page with the landscape label content at (300..2100, 800..2000)
+    arr = np.full((3300, 2550), 255, dtype=np.uint8)
+    arr[800:2000, 300:740] = 0     # rotated SHIP TO address column
+    arr[800:2000, 780:2100] = 0    # barcode / tracking area
+    img = Image.fromarray(arr)
+
+    # Vision bbox excludes the address column: 1300x1200 → ratio 1.08
+    result = _validate_and_crop({"x1": 800, "y1": 800, "x2": 2100, "y2": 2000}, img)
+    assert result is not None
+    # Full label is 1800 wide; without recovery the crop is ~1320 wide
+    assert result.width >= 1790, f"Address column not recovered: width {result.width}"
+
+
+def test_validate_and_crop_recovers_from_elongated_strip():
+    """A bbox framing only a wide strip of the label (e.g. just the barcode
+    band) grows vertically into the adjacent label content."""
+    arr = np.full((3300, 2550), 255, dtype=np.uint8)
+    arr[800:2000, 300:2100] = 0    # full label block: 1800x1200
+    img = Image.fromarray(arr)
+
+    # Bbox covers only the bottom 500px band: 1800x500 → ratio 3.6
+    result = _validate_and_crop({"x1": 300, "y1": 1500, "x2": 2100, "y2": 2000}, img)
+    assert result is not None
+    assert result.height >= 1190, f"Label body not recovered: height {result.height}"
+
+
 # --- extract_label_region tests ---
+
+
+@pytest.mark.asyncio
+async def test_extract_bare_label_image_skips_vision():
+    """A bare label image is used whole without calling the Vision API."""
+    img = _bare_label_image().convert("RGB")
+
+    mock_client = AsyncMock()
+    mock_anthropic = MagicMock()
+    mock_anthropic.AsyncAnthropic.return_value = mock_client
+
+    with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+        result = await extract_label_region(img, api_key="test-key")
+        assert result is img
+        mock_client.messages.create.assert_not_called()
 
 
 @pytest.mark.asyncio

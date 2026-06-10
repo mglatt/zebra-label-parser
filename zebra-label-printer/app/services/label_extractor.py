@@ -42,9 +42,15 @@ Exclude everything that is NOT the label itself:
 - Any barcodes or text OUTSIDE the label border.
 - Section headings like "Return Mailing Label" or "Return Authorization Slip" \
   that appear OUTSIDE or alongside the label.
-- Rotated text printed vertically along the edges of the label area \
-  (e.g., "Return Authorization Slip", "Return Mailing Label", or instruction \
-  text rotated 90 degrees). These are NOT part of the label.
+- Standalone instruction or heading text printed rotated 90 degrees \
+  alongside the label area (e.g., "Return Authorization Slip", "Return \
+  Mailing Label"). These are NOT part of the label.
+
+IMPORTANT exception: ship-from / ship-to ADDRESS BLOCKS are often printed \
+rotated 90 degrees relative to the barcodes (common on UPS and Amazon \
+return labels, where the addresses run along one side of the label). \
+Address blocks are ALWAYS part of the label and must be inside the \
+bounding box, whatever their rotation.
 
 If the label is enclosed by a dashed border, cut line, or rectangular outline, \
 the bounding box must cover everything INSIDE those lines but nothing outside \
@@ -148,6 +154,36 @@ def _is_letter_size(width: int, height: int) -> bool:
     ratio = max(width, height) / min(width, height)
     letter_ratio = 11.0 / 8.5  # ~1.294
     return abs(ratio - letter_ratio) < 0.13
+
+
+def _content_fills_label_frame(image: Image.Image) -> bool:
+    """True when the image itself is a bare label.
+
+    A carrier-generated label file (e.g. an Amazon "save label" PNG) has
+    4x6 proportions with ink reaching nearly every edge.  Such an image IS
+    the label — cropping it can only lose content, so Vision should be
+    skipped entirely.
+
+    Guards: the frame must have label proportions, content must span ~85%
+    of the frame, and the image must be mostly white (so a photo of a label
+    on a dark background still goes through Vision cropping).
+    """
+    ratio = max(image.width, image.height) / min(image.width, image.height)
+    if not (1.35 <= ratio <= 1.65):
+        return False
+
+    dark = np.array(image.convert("L")) < _DARK_THRESH
+    if dark.mean() > 0.4:
+        return False  # dark background — not a printed label file
+
+    # Ignore stray specks: a row/column counts as content with >=3 dark px
+    cols = np.nonzero(dark.sum(axis=0) >= 3)[0]
+    rows = np.nonzero(dark.sum(axis=1) >= 3)[0]
+    if cols.size == 0 or rows.size == 0:
+        return False
+
+    content_area = (cols[-1] - cols[0] + 1) * (rows[-1] - rows[0] + 1)
+    return bool(content_area / dark.size >= 0.85)
 
 
 def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
@@ -312,6 +348,65 @@ def _find_clean_line(
     return lo + int(clean[-1])
 
 
+def _expand_into_ink(
+    dark: np.ndarray, x1: int, y1: int, x2: int, y2: int
+) -> tuple[int, int, int, int]:
+    """Repair an off-aspect bbox by growing it into adjacent label content.
+
+    A bbox far from 4x6 proportions usually means one of two things: it
+    includes extra page content (handled by the whitespace cut), or it
+    MISSED part of the label — e.g. an address block printed rotated 90°
+    along one side (UPS/Amazon return labels).  If ink sits directly
+    beyond the deficient dimension's edges, the label continues there:
+    grow the bbox toward the expected 1.5 ratio to recover it.
+    """
+    h, w = dark.shape
+    crop_w, crop_h = x2 - x1, y2 - y1
+    long_side, short_side = max(crop_w, crop_h), min(crop_w, crop_h)
+    ratio = long_side / short_side if short_side > 0 else 0
+    if ratio <= 0:
+        return x1, y1, x2, y2
+
+    if ratio < 1.5:
+        # Too square: the long dimension is deficient — grow it toward 1.5
+        grow_width = crop_w >= crop_h
+        target = int(short_side * 1.5)
+    else:
+        # Too elongated: the short dimension is deficient — grow it toward 1.5
+        grow_width = crop_w < crop_h
+        target = int(long_side / 1.5)
+
+    # A strip column/row counts as ink with >=3 dark pixels (ignore specks)
+    if grow_width:
+        needed = target - (x2 - x1)
+        if needed > 0:
+            lo = max(0, x1 - needed)
+            ink = np.nonzero(dark[y1:y2, lo:x1].sum(axis=0) >= 3)[0]
+            if ink.size:
+                x1 = lo + int(ink[0])
+        needed = target - (x2 - x1)
+        if needed > 0:
+            hi = min(w, x2 + needed)
+            ink = np.nonzero(dark[y1:y2, x2:hi].sum(axis=0) >= 3)[0]
+            if ink.size:
+                x2 = x2 + int(ink[-1]) + 1
+    else:
+        needed = target - (y2 - y1)
+        if needed > 0:
+            lo = max(0, y1 - needed)
+            ink = np.nonzero(dark[lo:y1, x1:x2].sum(axis=1) >= 3)[0]
+            if ink.size:
+                y1 = lo + int(ink[0])
+        needed = target - (y2 - y1)
+        if needed > 0:
+            hi = min(h, y2 + needed)
+            ink = np.nonzero(dark[y2:hi, x1:x2].sum(axis=1) >= 3)[0]
+            if ink.size:
+                y2 = y2 + int(ink[-1]) + 1
+
+    return x1, y1, x2, y2
+
+
 def _expand_to_whitespace(
     dark: np.ndarray, x1: int, y1: int, x2: int, y2: int
 ) -> tuple[int, int, int, int]:
@@ -403,6 +498,24 @@ def _validate_and_crop(
     _MIN_RATIO = 1.3
     _MAX_RATIO = 2.2
 
+    # An off-aspect bbox may have MISSED part of the label (e.g. a rotated
+    # address block along one side).  If ink continues directly beyond the
+    # deficient edges, grow into it before considering any trim.
+    if ratio and (ratio < _MIN_RATIO or ratio > _MAX_RATIO):
+        gx1, gy1, gx2, gy2 = _expand_into_ink(dark, x1, y1, x2, y2)
+        if (gx1, gy1, gx2, gy2) != (x1, y1, x2, y2):
+            logger.info(
+                "Bbox ratio %.2f off-label, grew into adjacent ink: "
+                "(%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d)",
+                ratio, x1, y1, x2, y2, gx1, gy1, gx2, gy2,
+            )
+            x1, y1, x2, y2 = gx1, gy1, gx2, gy2
+            crop_w = x2 - x1
+            crop_h = y2 - y1
+            long_side = max(crop_w, crop_h)
+            short_side = min(crop_w, crop_h)
+            ratio = long_side / short_side if short_side > 0 else 0
+
     cut: Optional[int] = None
     if 0 < ratio < _MIN_RATIO:
         # Too square — trim the longer dimension to ~1.5 ratio
@@ -488,6 +601,13 @@ async def extract_label_region(
         "Extraction input: %dx%d, letter_size=%s, has_api_key=%s, strict=%s",
         image.width, image.height, is_letter, bool(api_key), strict,
     )
+
+    # The image itself is a bare label (label proportions, content edge to
+    # edge): use it whole.  Asking Vision for a bbox here can only lose
+    # content — there is nothing to crop away.
+    if _content_fills_label_frame(image):
+        logger.info("Image is already a bare label (content fills 4x6 frame), using full image")
+        return image
 
     if not api_key:
         logger.info("No API key configured, skipping Vision extraction")
