@@ -1,6 +1,7 @@
 """Use Claude Vision API to identify and extract shipping labels from images."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -13,11 +14,26 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _EXTRACTION_PROMPT = """\
-Locate the shipping label in this image and return its TIGHT bounding box.
+Locate the shipping label in this image and return a bounding box that \
+contains the ENTIRE label.
 
-A shipping label is approximately 4x6 inches and contains: delivery address, \
-return address, carrier barcodes, and carrier branding (UPS, FedEx, USPS, DHL). \
-The label may be oriented portrait OR landscape on the page.
+Shipping labels come from carriers such as UPS, FedEx, USPS, DHL, Amazon, \
+OnTrac, and regional couriers. A label is approximately 4x6 inches and may \
+be oriented portrait OR landscape on the page. A COMPLETE label includes \
+ALL of:
+- the carrier logo/banner and service type (e.g. GROUND, PRIORITY MAIL, \
+  2DAY, SUREPOST, HOME DELIVERY)
+- ship-from and ship-to addresses
+- weight, date, zone, and reference/order numbers
+- routing text and sort codes (e.g. "TRK#", USPS banner text, FedEx ASTRA)
+- EVERY barcode belonging to the label: linear barcodes, QR / Data Matrix / \
+  Aztec codes, and the square dotted UPS MaxiCode. The main tracking \
+  barcode is usually near the BOTTOM of the label — it must NOT be cut off.
+
+CRITICAL: a bounding box that clips ANY part of the label (a barcode, a \
+text line, or the carrier banner) is wrong. If you are unsure exactly where \
+the label ends, return a slightly LARGER box — surrounding whitespace is \
+removed automatically later, but clipped content cannot be recovered.
 
 On full-page documents (8.5x11"), the label is one section of the page. \
 Exclude everything that is NOT the label itself:
@@ -31,16 +47,15 @@ Exclude everything that is NOT the label itself:
   text rotated 90 degrees). These are NOT part of the label.
 
 If the label is enclosed by a dashed border, cut line, or rectangular outline, \
-the bounding box must be STRICTLY INSIDE those lines. Do not include any \
-content outside the dashed rectangle, even if it is adjacent to the label. \
-The bounding box should approximate the label's 4x6 inch proportions \
-(either portrait or landscape).
+the bounding box must cover everything INSIDE those lines but nothing outside \
+them.
 
 Return the bounding box as percentages of image dimensions (0-100):
 
 {"x1_pct": <left>, "y1_pct": <top>, "x2_pct": <right>, "y2_pct": <bottom>}
 
-If the shipping label fills the entire image, return:
+If the shipping label fills the entire image (or the image IS the label), \
+return:
 {"x1_pct": 0, "y1_pct": 0, "x2_pct": 100, "y2_pct": 100}
 
 If there is NO shipping label in this image (e.g. it is an instruction page, \
@@ -48,6 +63,12 @@ packing slip, or receipt with no carrier label), return:
 {"no_label": true}
 
 Return ONLY valid JSON, no other text."""
+
+# Pixels darker than this grayscale value count as ink.
+_DARK_THRESH = 200
+# A row/column is "clean" (whitespace) when fewer than this fraction of its
+# pixels are dark.
+_CLEAN_FRAC = 0.004
 
 
 def _image_to_base64(image: Image.Image) -> str:
@@ -75,16 +96,36 @@ def _parse_bbox(text: str, width: int, height: int) -> Optional[dict]:
 
         # Convert percentage coords to pixels
         if "x1_pct" in data:
+            vals = [
+                float(data["x1_pct"]),
+                float(data["y1_pct"]),
+                float(data["x2_pct"]),
+                float(data["y2_pct"]),
+            ]
+            # Some responses use 0-1 fractions instead of 0-100 percentages.
+            # A genuine percentage bbox with all values <= 1 would cover under
+            # 1% of the image — degenerate either way — so rescaling is safe.
+            if all(0 <= v <= 1.0 for v in vals) and (vals[2] > vals[0] and vals[3] > vals[1]):
+                vals = [v * 100.0 for v in vals]
+            # Clamp slight overshoots (e.g. 100.5 or -2) rather than letting
+            # them invalidate an otherwise good bbox.
+            vals = [min(100.0, max(0.0, v)) for v in vals]
             data = {
-                "x1": data["x1_pct"] / 100.0 * width,
-                "y1": data["y1_pct"] / 100.0 * height,
-                "x2": data["x2_pct"] / 100.0 * width,
-                "y2": data["y2_pct"] / 100.0 * height,
+                "x1": vals[0] / 100.0 * width,
+                "y1": vals[1] / 100.0 * height,
+                "x2": vals[2] / 100.0 * width,
+                "y2": vals[3] / 100.0 * height,
             }
 
         for key in ("x1", "y1", "x2", "y2"):
             if key not in data:
                 return None
+
+        # Clamp pixel coords to image bounds
+        data["x1"] = min(width, max(0, float(data["x1"])))
+        data["x2"] = min(width, max(0, float(data["x2"])))
+        data["y1"] = min(height, max(0, float(data["y1"])))
+        data["y2"] = min(height, max(0, float(data["y2"])))
 
         # Snap to 10px grid to reduce run-to-run jitter
         _GRID = 10
@@ -94,7 +135,7 @@ def _parse_bbox(text: str, width: int, height: int) -> Optional[dict]:
         data["y2"] = int(-(-data["y2"] // _GRID) * _GRID)
 
         return data
-    except (json.JSONDecodeError, TypeError, KeyError):
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
         return None
 
 
@@ -244,25 +285,88 @@ def _tighten_to_content(image: Image.Image) -> Image.Image:
     return image
 
 
+def _find_clean_line(
+    dark: np.ndarray, target: int, radius: int, span: slice, axis: int
+) -> Optional[int]:
+    """Find a whitespace row (axis=0) or column (axis=1) near *target*.
+
+    Scans positions in [target-radius, target+radius]; a position qualifies
+    when fewer than _CLEAN_FRAC of its pixels inside *span* are dark.
+    Returns the qualifying position that keeps the most content (largest
+    index — callers only ever trim from the bottom/right), or None when no
+    clean line exists.  Cutting anywhere else would slice through label
+    content, so callers must skip the trim in that case.
+    """
+    n = dark.shape[axis]
+    lo = max(0, target - radius)
+    hi = min(n, target + radius + 1)
+    if hi <= lo:
+        return None
+    if axis == 0:
+        frac = dark[lo:hi, span].mean(axis=1)
+    else:
+        frac = dark[span, lo:hi].mean(axis=0)
+    clean = np.nonzero(frac < _CLEAN_FRAC)[0]
+    if clean.size == 0:
+        return None
+    return lo + int(clean[-1])
+
+
+def _expand_to_whitespace(
+    dark: np.ndarray, x1: int, y1: int, x2: int, y2: int
+) -> tuple[int, int, int, int]:
+    """Grow the bbox outward until every edge lies on a whitespace line.
+
+    If the Vision bbox slices through ink (most commonly the edge of a
+    barcode), push that edge outward until the boundary row/column is
+    clean, capped at ~8% of the page dimension so adjacent page content
+    is not swallowed wholesale.
+    """
+    h, w = dark.shape
+    max_dx = max(40, int(w * 0.08))
+    max_dy = max(40, int(h * 0.08))
+    lim_x1 = max(0, x1 - max_dx)
+    lim_x2 = min(w, x2 + max_dx)
+    lim_y1 = max(0, y1 - max_dy)
+    lim_y2 = min(h, y2 + max_dy)
+
+    # Two passes: expanding one edge can expose ink on a neighbouring edge.
+    for _ in range(2):
+        while x1 > lim_x1 and dark[y1:y2, x1].mean() >= _CLEAN_FRAC:
+            x1 -= 1
+        while x2 < lim_x2 and dark[y1:y2, x2 - 1].mean() >= _CLEAN_FRAC:
+            x2 += 1
+        while y1 > lim_y1 and dark[y1, x1:x2].mean() >= _CLEAN_FRAC:
+            y1 -= 1
+        while y2 < lim_y2 and dark[y2 - 1, x1:x2].mean() >= _CLEAN_FRAC:
+            y2 += 1
+
+    return x1, y1, x2, y2
+
+
 def _validate_and_crop(
     bbox: dict, image: Image.Image
 ) -> Optional[Image.Image]:
     """Validate bbox and return cropped image, or None if invalid.
 
     Accepts both portrait and landscape crops — the image processor
-    handles rotation later.
+    handles rotation later.  Coordinates are clamped to the image rather
+    than rejected, and all trimming is whitespace-aware: a cut is only
+    made along a genuinely blank line so label content is never sliced.
     """
     width, height = image.width, image.height
-    x1, y1, x2, y2 = bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]
+
+    # Clamp to image bounds — Vision occasionally overshoots slightly, and
+    # rejecting the bbox outright would fall back to a heuristic crop that
+    # is far more likely to cut the label.
+    x1 = int(min(width, max(0, bbox["x1"])))
+    x2 = int(min(width, max(0, bbox["x2"])))
+    y1 = int(min(height, max(0, bbox["y1"])))
+    y2 = int(min(height, max(0, bbox["y2"])))
 
     # Must be positive dimensions
     if x2 <= x1 or y2 <= y1:
         logger.warning("Invalid bbox dimensions: (%d,%d)-(%d,%d)", x1, y1, x2, y2)
-        return None
-
-    # Must be within image bounds (with small tolerance)
-    if x1 < -5 or y1 < -5 or x2 > width + 5 or y2 > height + 5:
-        logger.warning("Bbox out of bounds: (%d,%d)-(%d,%d) for %dx%d image", x1, y1, x2, y2, width, height)
         return None
 
     bbox_area = (x2 - x1) * (y2 - y1)
@@ -274,14 +378,21 @@ def _validate_and_crop(
         logger.warning("Bbox too small (%.1f%% of image)", coverage * 100)
         return None
 
-    # Covers >90% of the image = no meaningful crop
+    # Covers >90% of the image: the image IS the label (e.g. a 4x6 PDF or a
+    # pre-cropped upload).  Return it whole — falling back to a heuristic
+    # crop here would cut a full-frame label apart.
     if coverage > 0.90:
-        logger.info("Bbox covers %.1f%% of image, no meaningful crop", coverage * 100)
-        return None
+        logger.info("Bbox covers %.1f%% of image, using full frame", coverage * 100)
+        return image
 
-    # Trim bbox to approximate a 4×6" label aspect ratio (1.5:1).
-    # A ratio far from 1.5 likely means the crop includes content outside
-    # the label (e.g., a return authorization slip barcode below the label).
+    dark = np.array(image.convert("L")) < _DARK_THRESH
+
+    # Trim bbox toward a 4×6" label aspect ratio (1.5:1) when it is far off —
+    # that usually means the crop includes content outside the label (e.g. a
+    # return-slip barcode below it).  The cut is only applied along a clean
+    # whitespace line; if none exists near the target, the label itself is
+    # probably non-standard (doc-tab labels, etc.) and we keep the full bbox
+    # rather than risk slicing it.
     crop_w = x2 - x1
     crop_h = y2 - y1
     long_side = max(crop_w, crop_h)
@@ -292,33 +403,59 @@ def _validate_and_crop(
     _MIN_RATIO = 1.3
     _MAX_RATIO = 2.2
 
+    cut: Optional[int] = None
     if 0 < ratio < _MIN_RATIO:
         # Too square — trim the longer dimension to ~1.5 ratio
         if crop_w >= crop_h:
             # Landscape: trim from bottom (return slips are typically below)
-            y2 = y1 + int(crop_w / _EXPECTED_RATIO)
+            target = y1 + int(crop_w / _EXPECTED_RATIO)
+            cut = _find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), axis=0)
+            if cut is not None and cut > y1:
+                y2 = cut
         else:
             # Portrait: trim from right
-            x2 = x1 + int(crop_h / _EXPECTED_RATIO)
-        logger.info("Bbox ratio %.2f too square, trimmed to ~%.1f ratio", ratio, _EXPECTED_RATIO)
+            target = x1 + int(crop_h / _EXPECTED_RATIO)
+            cut = _find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), axis=1)
+            if cut is not None and cut > x1:
+                x2 = cut
     elif ratio > _MAX_RATIO:
         # Too elongated — trim the longer dimension
         if crop_w >= crop_h:
             # Very wide: trim from right
-            x2 = x1 + int(crop_h * _EXPECTED_RATIO)
+            target = x1 + int(crop_h * _EXPECTED_RATIO)
+            cut = _find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), axis=1)
+            if cut is not None and cut > x1:
+                x2 = cut
         else:
             # Very tall: trim from bottom
-            y2 = y1 + int(crop_w * _EXPECTED_RATIO)
-        logger.info("Bbox ratio %.2f too elongated, trimmed to ~%.1f ratio", ratio, _EXPECTED_RATIO)
+            target = y1 + int(crop_w * _EXPECTED_RATIO)
+            cut = _find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), axis=0)
+            if cut is not None and cut > y1:
+                y2 = cut
 
-    # Add safety margin to prevent edge content (barcodes) from being clipped.
-    # _trim_whitespace() in the image processor removes excess whitespace later.
-    margin_x = max(30, int(width * 0.015))
-    margin_y = max(30, int(height * 0.015))
-    x1 = max(0, int(x1) - margin_x)
-    y1 = max(0, int(y1) - margin_y)
-    x2 = min(width, int(x2) + margin_x)
-    y2 = min(height, int(y2) + margin_y)
+    if ratio and (ratio < _MIN_RATIO or ratio > _MAX_RATIO):
+        if cut is not None:
+            logger.info("Bbox ratio %.2f off-label, trimmed along whitespace at %d", ratio, cut)
+        else:
+            logger.info("Bbox ratio %.2f off-label but no clean cut line — keeping full bbox", ratio)
+
+    # If the bbox edge slices through ink (e.g. the edge of a barcode), grow
+    # it outward until each edge sits on whitespace.
+    ex1, ey1, ex2, ey2 = _expand_to_whitespace(dark, x1, y1, x2, y2)
+    if (ex1, ey1, ex2, ey2) != (x1, y1, x2, y2):
+        logger.info(
+            "Expanded bbox to whitespace: x %d→%d, y %d→%d, x2 %d→%d, y2 %d→%d",
+            x1, ex1, y1, ey1, x2, ex2, y2, ey2,
+        )
+        x1, y1, x2, y2 = ex1, ey1, ex2, ey2
+
+    # Small safety margin; _trim_whitespace() in the image processor removes
+    # excess whitespace later.
+    _MARGIN = 20
+    x1 = max(0, x1 - _MARGIN)
+    y1 = max(0, y1 - _MARGIN)
+    x2 = min(width, x2 + _MARGIN)
+    y2 = min(height, y2 + _MARGIN)
 
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
@@ -366,7 +503,7 @@ async def extract_label_region(
         client = anthropic.AsyncAnthropic(api_key=api_key)
         b64 = _image_to_base64(image)
 
-        response = await client.messages.create(
+        request = dict(
             model=model,
             max_tokens=128,
             temperature=0,
@@ -390,6 +527,15 @@ async def extract_label_region(
                 },
             ],
         )
+
+        # Retry once on transient API failures before giving up — a failed
+        # call otherwise degrades to a heuristic crop that may cut the label.
+        try:
+            response = await client.messages.create(**request)
+        except Exception as exc:
+            logger.warning("Vision API call failed, retrying once: %s", exc)
+            await asyncio.sleep(1)
+            response = await client.messages.create(**request)
 
         # Capture token usage for the caller
         if usage_out is not None and hasattr(response, "usage"):
