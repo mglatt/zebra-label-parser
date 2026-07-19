@@ -86,3 +86,21 @@ async def test_bare_label_bypasses_vision():
         result = await extract_label_region(img, api_key="test-key")
         assert result is img
         mock_client.messages.create.assert_not_called()
+
+
+@pytest.mark.parametrize("make", syn.BBOX_SCENARIOS, ids=lambda f: f.__name__)
+def test_crop_is_resolution_independent(make):
+    """The same page at 150 and 300 DPI must crop to the same geometry.
+
+    All refinement lengths are expressed in inches and scaled through
+    CropSpec.dpi, so a lower-resolution render of the same page yields a
+    proportionally identical crop (within 1% for rounding).
+    """
+    from app.services.crop_geometry import CropSpec
+
+    full, half = make(1.0), make(0.5)
+    r_full = _validate_and_crop(full.bbox, full.image, CropSpec(dpi=300))
+    r_half = _validate_and_crop(half.bbox, half.image, CropSpec(dpi=150))
+    assert r_full is not None and r_half is not None
+    assert abs(r_half.width * 2 - r_full.width) <= 0.01 * r_full.width
+    assert abs(r_half.height * 2 - r_full.height) <= 0.01 * r_full.height

@@ -13,13 +13,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SPEC = CropSpec()
 
 
-def _trim_whitespace(img: Image.Image) -> Image.Image:
+def _trim_whitespace(img: Image.Image, src_dpi: float = 300.0) -> Image.Image:
     """Remove whitespace borders so content dimensions are accurate.
 
     Delegates to the shared trim stage in crop_geometry (same ink
     threshold and margin as the crop pipeline).
     """
-    return crop_geometry.trim_to_content(img, _DEFAULT_SPEC)
+    spec = _DEFAULT_SPEC if src_dpi == _DEFAULT_SPEC.dpi else CropSpec(dpi=src_dpi)
+    return crop_geometry.trim_to_content(img, spec)
 
 
 def prepare_label_image(
@@ -29,6 +30,7 @@ def prepare_label_image(
     dither: bool = False,
     scale_pct: int = 100,
     left_offset: int = 0,
+    src_dpi: float = 300.0,
 ) -> Image.Image:
     """Resize, orient, and convert an image to a 1-bit monochrome label.
 
@@ -44,7 +46,7 @@ def prepare_label_image(
     img = image.convert("RGB")
 
     # Trim whitespace so dimensions reflect actual content, not a loose crop
-    img = _trim_whitespace(img)
+    img = _trim_whitespace(img, src_dpi=src_dpi)
 
     # Auto-rotate: if image is landscape but label is portrait, rotate
     img_landscape = img.width > img.height

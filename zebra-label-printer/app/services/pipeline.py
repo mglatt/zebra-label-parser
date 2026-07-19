@@ -42,6 +42,33 @@ def _detect_file_type(filename: str, data: bytes) -> str:
     return "image"  # default to image, PIL will error if it's not
 
 
+# PDF pages are always rendered at this resolution.
+_RENDER_DPI = 300
+
+
+def _estimate_image_dpi(width: int, height: int, settings: Settings) -> float:
+    """Estimate the resolution of an uploaded image from its proportions.
+
+    Uploads carry no reliable DPI metadata, but the two shapes we can
+    recognize pin it down: a letter-proportioned page spans 11" on its
+    long side, and a label-proportioned image spans the configured stock's
+    long side.  Anything else gets the PDF render default — equivalent to
+    the historical fixed-pixel behavior.
+    """
+    long_side, short_side = max(width, height), min(width, height)
+    ratio = long_side / short_side if short_side else 1.0
+    letter_ratio = 11.0 / 8.5
+    label_long = max(settings.label_width_inches, settings.label_height_inches)
+    label_short = min(settings.label_width_inches, settings.label_height_inches)
+    label_ratio = label_long / label_short if label_short else 1.5
+
+    if abs(ratio - letter_ratio) < 0.13:
+        return long_side / 11.0
+    if abs(ratio - label_ratio) <= 0.1 * label_ratio:
+        return long_side / label_long
+    return _RENDER_DPI
+
+
 def _is_label_sized_page(width_in: float, height_in: float) -> bool:
     """True when a PDF page is already thermal-label stock.
 
@@ -90,12 +117,16 @@ async def process_and_print(
         file_type = _detect_file_type(filename, file_bytes)
         stage("detect", f"type={file_type}")
 
+        # Resolution of the working image (exact for PDF renders, estimated
+        # for uploads) — the crop heuristics scale their lengths with it.
+        working_dpi: float = _RENDER_DPI
+
         if file_type == "pdf":
             page_count = get_page_count(file_bytes)
 
             if page_count == 1:
                 # Single-page PDF — current behaviour
-                image = render_pdf_page(file_bytes, page=0, dpi=300)
+                image = render_pdf_page(file_bytes, page=0, dpi=_RENDER_DPI)
                 stage("render", f"page 1 of 1, {image.width}x{image.height}")
 
                 w_in, h_in = get_page_size_inches(file_bytes, page=0)
@@ -111,6 +142,7 @@ async def process_and_print(
                         api_key=settings.anthropic_api_key,
                         model=settings.claude_model,
                         usage_out=usage,
+                        dpi=_RENDER_DPI,
                     )
                     _accumulate_usage(usage)
                     if extracted is not image:
@@ -124,7 +156,7 @@ async def process_and_print(
                 page_0_image = None
 
                 for page_num in range(page_count):
-                    page_image = render_pdf_page(file_bytes, page=page_num, dpi=300)
+                    page_image = render_pdf_page(file_bytes, page=page_num, dpi=_RENDER_DPI)
                     if page_num == 0:
                         page_0_image = page_image
                     stage("render", f"page {page_num + 1} of {page_count}, "
@@ -147,6 +179,7 @@ async def process_and_print(
                         model=settings.claude_model,
                         strict=True,
                         usage_out=usage,
+                        dpi=_RENDER_DPI,
                     )
                     _accumulate_usage(usage)
                     if result is not None:
@@ -168,13 +201,15 @@ async def process_and_print(
                         model=settings.claude_model,
                         strict=False,
                         usage_out=usage,
+                        dpi=_RENDER_DPI,
                     )
                     _accumulate_usage(usage)
                     stage("extract", f"fallback to page 1, "
                           f"{extracted.width}x{extracted.height}")
         else:
             image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-            stage("load", f"{image.width}x{image.height}")
+            working_dpi = _estimate_image_dpi(image.width, image.height, settings)
+            stage("load", f"{image.width}x{image.height} (~{working_dpi:.0f} dpi)")
 
             usage = _usage_dict()
             extracted = await extract_label_region(
@@ -182,6 +217,7 @@ async def process_and_print(
                 api_key=settings.anthropic_api_key,
                 model=settings.claude_model,
                 usage_out=usage,
+                dpi=working_dpi,
             )
             _accumulate_usage(usage)
             if extracted is not image:
@@ -196,6 +232,7 @@ async def process_and_print(
             height=settings.label_height_px,
             scale_pct=scale_pct,
             left_offset=settings.label_left_offset,
+            src_dpi=working_dpi,
         )
         stage("process", f"{label.width}x{label.height} mono @ {scale_pct}%")
 

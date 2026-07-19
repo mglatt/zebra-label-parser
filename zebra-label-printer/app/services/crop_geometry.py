@@ -56,8 +56,16 @@ class CropSpec:
     min_gap_in: float = 20 / 300
     # Cap on outward growth per edge, as a fraction of the page dimension.
     max_grow_frac: float = 0.08
+    # Floor on the growth cap, so small pages still allow a useful grow.
+    min_grow_in: float = 40 / 300
     # Shedding only inspects this outer fraction of each edge.
     edge_frac: float = 0.15
+    # Boxes smaller than this per side are never shed (tiny crops carry no
+    # shed-able bands, only content).
+    min_shed_in: float = 200 / 300
+    # A strip row/column needs this much ink to count as content rather
+    # than stray specks.
+    speck_in: float = 0.01
 
     @property
     def margin_px(self) -> int:
@@ -66,6 +74,18 @@ class CropSpec:
     @property
     def min_gap_px(self) -> int:
         return max(1, round(self.min_gap_in * self.dpi))
+
+    @property
+    def min_grow_px(self) -> int:
+        return max(1, round(self.min_grow_in * self.dpi))
+
+    @property
+    def min_shed_px(self) -> int:
+        return max(1, round(self.min_shed_in * self.dpi))
+
+    @property
+    def speck_px(self) -> int:
+        return max(1, round(self.speck_in * self.dpi))
 
     # Bboxes with a ratio outside [min_ratio, max_ratio] get repaired.
     # The window scales with the expected ratio; at 1.5 it is the
@@ -143,31 +163,31 @@ def _grow_into_ink(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
         grow_width = crop_w < crop_h
         target = int(long_side / spec.expected_ratio)
 
-    # A strip column/row counts as ink with >=3 dark pixels (ignore specks)
+    # A strip column/row counts as ink above the speck floor
     if grow_width:
         needed = target - (x2 - x1)
         if needed > 0:
             lo = max(0, x1 - needed)
-            ink = np.nonzero(dark[y1:y2, lo:x1].sum(axis=0) >= 3)[0]
+            ink = np.nonzero(dark[y1:y2, lo:x1].sum(axis=0) >= spec.speck_px)[0]
             if ink.size:
                 x1 = lo + int(ink[0])
         needed = target - (x2 - x1)
         if needed > 0:
             hi = min(w, x2 + needed)
-            ink = np.nonzero(dark[y1:y2, x2:hi].sum(axis=0) >= 3)[0]
+            ink = np.nonzero(dark[y1:y2, x2:hi].sum(axis=0) >= spec.speck_px)[0]
             if ink.size:
                 x2 = x2 + int(ink[-1]) + 1
     else:
         needed = target - (y2 - y1)
         if needed > 0:
             lo = max(0, y1 - needed)
-            ink = np.nonzero(dark[lo:y1, x1:x2].sum(axis=1) >= 3)[0]
+            ink = np.nonzero(dark[lo:y1, x1:x2].sum(axis=1) >= spec.speck_px)[0]
             if ink.size:
                 y1 = lo + int(ink[0])
         needed = target - (y2 - y1)
         if needed > 0:
             hi = min(h, y2 + needed)
-            ink = np.nonzero(dark[y2:hi, x1:x2].sum(axis=1) >= 3)[0]
+            ink = np.nonzero(dark[y2:hi, x1:x2].sum(axis=1) >= spec.speck_px)[0]
             if ink.size:
                 y2 = y2 + int(ink[-1]) + 1
 
@@ -184,8 +204,8 @@ def _grow_to_whitespace(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
     """
     x1, y1, x2, y2 = box
     h, w = dark.shape
-    max_dx = max(40, int(w * spec.max_grow_frac))
-    max_dy = max(40, int(h * spec.max_grow_frac))
+    max_dx = max(spec.min_grow_px, int(w * spec.max_grow_frac))
+    max_dy = max(spec.min_grow_px, int(h * spec.max_grow_frac))
     lim_x1 = max(0, x1 - max_dx)
     lim_x2 = min(w, x2 + max_dx)
     lim_y1 = max(0, y1 - max_dy)
@@ -381,7 +401,7 @@ def shed_separated_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
     the box.  Boxes smaller than 200px per side are left alone.
     """
     x1, y1, x2, y2 = box
-    if x2 - x1 < 200 or y2 - y1 < 200:
+    if x2 - x1 < spec.min_shed_px or y2 - y1 < spec.min_shed_px:
         return box
     return _edge_bands(mask, _ratio_cut(mask, box, spec), spec)
 
@@ -390,7 +410,7 @@ def _edge_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
     """Drop gap-separated content bands along the box edges (see shed_separated_bands)."""
     bx1, by1, bx2, by2 = box
     w, h = bx2 - bx1, by2 - by1
-    if w < 200 or h < 200:
+    if w < spec.min_shed_px or h < spec.min_shed_px:
         return box
 
     sub = mask[by1:by2, bx1:bx2]

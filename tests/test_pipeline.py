@@ -213,3 +213,33 @@ async def test_pipeline_print_failure(sample_image):
         result = await process_and_print(png_bytes, "test.png", settings, "TestPrinter")
 
         assert result["success"] is False
+
+
+# --- DPI estimation for uploaded images ---
+
+
+def test_estimate_dpi_letter_page():
+    from app.config import Settings
+    from app.services.pipeline import _estimate_image_dpi
+
+    s = Settings(anthropic_api_key=None)
+    assert _estimate_image_dpi(2550, 3300, s) == pytest.approx(300.0)
+    assert _estimate_image_dpi(1275, 1650, s) == pytest.approx(150.0)
+    assert _estimate_image_dpi(3300, 2550, s) == pytest.approx(300.0)  # rotated
+
+
+def test_estimate_dpi_label_shaped_image():
+    from app.config import Settings
+    from app.services.pipeline import _estimate_image_dpi
+
+    s = Settings(anthropic_api_key=None)  # 4x6 default stock
+    assert _estimate_image_dpi(1200, 1800, s) == pytest.approx(300.0)
+    assert _estimate_image_dpi(812, 1218, s) == pytest.approx(203.0)
+
+
+def test_estimate_dpi_unrecognized_shape_uses_default():
+    from app.config import Settings
+    from app.services.pipeline import _estimate_image_dpi
+
+    s = Settings(anthropic_api_key=None)
+    assert _estimate_image_dpi(1000, 1000, s) == 300
