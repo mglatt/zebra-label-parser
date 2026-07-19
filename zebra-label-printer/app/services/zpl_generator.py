@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import base64
-import struct
 import zlib
 
+import numpy as np
 from PIL import Image
 
 
@@ -37,25 +37,10 @@ def _image_to_bytes(image: Image.Image) -> tuple[bytes, int, int]:
     width, height = image.size
     bytes_per_row = (width + 7) // 8
 
-    rows = []
-    for y in range(height):
-        row_byte = 0
-        row_bytes = bytearray()
-        for x in range(width):
-            pixel = image.getpixel((x, y))
-            bit_pos = 7 - (x % 8)
-            # Pillow: 0=black, 255=white. ZPL: 1=black, 0=white.
-            if pixel == 0:
-                row_byte |= (1 << bit_pos)
-            if x % 8 == 7:
-                row_bytes.append(row_byte)
-                row_byte = 0
-        # Flush partial byte at end of row
-        if width % 8 != 0:
-            row_bytes.append(row_byte)
-        rows.append(bytes(row_bytes))
-
-    data = b"".join(rows)
+    # Pillow: 0=black, 255=white. ZPL: 1=black, 0=white — pack the inverted
+    # mask MSB-first; packbits zero-pads each row to a whole byte.
+    black = ~np.asarray(image, dtype=bool)
+    data = np.packbits(black, axis=1).tobytes()
     return data, bytes_per_row, len(data)
 
 
