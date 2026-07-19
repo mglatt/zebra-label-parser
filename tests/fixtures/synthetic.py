@@ -59,6 +59,13 @@ def _s(v: float, scale: float) -> int:
     return int(round(v * scale))
 
 
+def _scaler(scale: float):
+    def s(v: float) -> int:
+        return _s(v, scale)
+
+    return s
+
+
 def ups_rotated_address_page(scale: float = 1.0) -> Scenario:
     """Letter page where Vision missed the rotated address column.
 
@@ -67,7 +74,7 @@ def ups_rotated_address_page(scale: float = 1.0) -> Scenario:
     Vision bbox frames only the barcode area — too square — and the crop
     logic must grow left to recover the address column.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     arr = _blank_page(s(2550), s(3300))
     addr = (s(300), s(800), s(740), s(2000))
     body = (s(780), s(800), s(2100), s(2000))
@@ -88,7 +95,7 @@ def label_with_return_slip_below(scale: float = 1.0) -> Scenario:
     slip strip sits below it.  The too-square bbox must be trimmed at the
     gap so the slip is excluded while the label survives whole.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     arr = _blank_page(s(2550), s(3300))
     label = (s(150), s(850), s(2050), s(2100))
     slip = (s(150), s(2200), s(2050), s(2380))
@@ -109,7 +116,7 @@ def dense_doctab_label(scale: float = 1.0) -> Scenario:
     Trimming anywhere would slice through label ink, so the crop logic
     must keep the full bbox (non-standard/doc-tab label stock).
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     arr = _blank_page(s(2550), s(3300))
     block = (s(100), s(800), s(2100), s(2400))
     arr[block[1]:block[3], block[0]:block[2]] = 0
@@ -126,7 +133,7 @@ def barcode_clipped_bbox(scale: float = 1.0) -> Scenario:
 
     The edge must grow outward until the whole barcode is inside.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     arr = _blank_page(s(1000), s(1400))
     content = (s(200), s(200), s(800), s(880))
     barcode = (s(200), s(900), s(800), s(1050))
@@ -145,7 +152,7 @@ def elongated_strip_bbox(scale: float = 1.0) -> Scenario:
 
     The deficient dimension must grow back into the adjacent label ink.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     arr = _blank_page(s(2550), s(3300))
     label = (s(300), s(800), s(2100), s(2000))
     arr[label[1]:label[3], label[0]:label[2]] = 0
@@ -164,7 +171,7 @@ def bare_label_image(scale: float = 1.0) -> Scenario:
     layout).  Text/barcode lines are drawn sparsely — real labels are
     mostly white.  Must bypass Vision and be used whole.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     w, h = s(1800), s(1200)
     arr = _blank_page(w, h)
     arr[s(40):s(1160):6, s(40):s(480)] = 0     # rotated address column
@@ -184,7 +191,7 @@ def amazon_sidebar_crop(scale: float = 1.0) -> Scenario:
     separated from the dense label content by ~30px whitespace gaps.
     The tighten/shed stage must drop the sidebars and keep the label.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     w, h = s(1000), s(700)
     arr = _blank_page(w, h)
     left = (0, s(50), s(60), s(650))
@@ -214,7 +221,7 @@ def sparse_address_crop(scale: float = 1.0) -> Scenario:
     Address columns carry ~1% ink: above the whitespace threshold, so the
     tighten/shed stage must leave the crop untouched.
     """
-    s = lambda v: _s(v, scale)
+    s = _scaler(scale)
     w, h = s(600), s(400)
     arr = _blank_page(w, h)
     addr = (0, s(30), s(150), s(374))

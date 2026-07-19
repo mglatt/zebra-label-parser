@@ -1,4 +1,12 @@
-"""Use Claude Vision API to identify and extract shipping labels from images."""
+"""Use Claude Vision API to identify and extract shipping labels from images.
+
+Contract: the Vision prompt owns SEMANTICS — deciding what is and is not
+part of the label (include rotated address blocks, exclude return slips
+and sidebar headings).  The geometric refinement of the returned bbox
+(grow / shed / finish) lives in crop_geometry, which owns SAFETY and
+never cuts through ink.  Keep carrier-specific knowledge in the prompt;
+keep geometry carrier-agnostic.
+"""
 from __future__ import annotations
 
 import asyncio
