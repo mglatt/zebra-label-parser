@@ -116,7 +116,7 @@ def find_clean_line(
     return lo + int(clean[-1])
 
 
-def expand_into_ink(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
+def _grow_into_ink(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
     """Repair an off-aspect bbox by growing it into adjacent label content.
 
     A bbox far from label proportions usually means one of two things: it
@@ -174,7 +174,7 @@ def expand_into_ink(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
     return x1, y1, x2, y2
 
 
-def expand_to_whitespace(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
+def _grow_to_whitespace(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
     """Grow the bbox outward until every edge lies on a whitespace line.
 
     If the bbox slices through ink (most commonly the edge of a barcode),
@@ -203,6 +203,56 @@ def expand_to_whitespace(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
             y2 += 1
 
     return x1, y1, x2, y2
+
+
+def grow_box(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """Grow the box so it frames the whole label — never shrink it.
+
+    Two phases, both of which only ever move edges outward:
+
+    1. Ratio repair: a box far off the expected label ratio may have
+       MISSED part of the label (e.g. an address block printed rotated 90°
+       along one side of UPS/Amazon return labels).  If ink sits directly
+       beyond the deficient dimension's edges, grow toward the expected
+       ratio to recover it.
+    2. Whitespace landing: any edge that still slices through ink (most
+       commonly a barcode edge) is pushed outward until it rests on a
+       clean line, capped at ``spec.max_grow_frac`` of the page dimension.
+    """
+    x1, y1, x2, y2 = box
+    crop_w, crop_h = x2 - x1, y2 - y1
+    long_side, short_side = max(crop_w, crop_h), min(crop_w, crop_h)
+    ratio = long_side / short_side if short_side > 0 else 0
+    if ratio and (ratio < spec.min_ratio or ratio > spec.max_ratio):
+        grown = _grow_into_ink(mask, box, spec)
+        if grown != box:
+            logger.info(
+                "Box ratio %.2f off-label, grew into adjacent ink: %s -> %s",
+                ratio, box, grown,
+            )
+            box = grown
+
+    grown = _grow_to_whitespace(mask, box, spec)
+    if grown != box:
+        logger.info("Grew box to whitespace: %s -> %s", box, grown)
+        box = grown
+
+    return box
+
+
+def refine_label_box(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """Refine a validated bbox proposal: GROW, then SHED, then FINISH.
+
+    Growing runs first so clipped content (barcodes, rotated address
+    blocks) is recovered before any trimming decision; shedding then
+    drops gap-separated non-label content; finish_box applies the single
+    trim-to-content + margin stage.  There is no second grow: shed edges
+    always rest on clean whitespace lines, and re-running the ratio
+    repair could pull just-shed content back in.
+    """
+    box = grow_box(mask, box, spec)
+    box = shed_separated_bands(mask, box, spec)
+    return finish_box(mask, box, spec)
 
 
 def content_box(mask: np.ndarray, box: Box) -> Optional[Box]:

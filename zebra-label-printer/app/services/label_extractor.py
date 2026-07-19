@@ -237,7 +237,7 @@ def _expand_into_ink(
     spec: CropSpec = _DEFAULT_SPEC,
 ) -> tuple[int, int, int, int]:
     """Grow an off-aspect bbox into adjacent label ink (see crop_geometry)."""
-    return crop_geometry.expand_into_ink(dark, (x1, y1, x2, y2), spec)
+    return crop_geometry._grow_into_ink(dark, (x1, y1, x2, y2), spec)
 
 
 def _expand_to_whitespace(
@@ -249,7 +249,7 @@ def _expand_to_whitespace(
     spec: CropSpec = _DEFAULT_SPEC,
 ) -> tuple[int, int, int, int]:
     """Grow the bbox until every edge lies on whitespace (see crop_geometry)."""
-    return crop_geometry.expand_to_whitespace(dark, (x1, y1, x2, y2), spec)
+    return crop_geometry._grow_to_whitespace(dark, (x1, y1, x2, y2), spec)
 
 
 def _validate_and_crop(
@@ -295,41 +295,9 @@ def _validate_and_crop(
 
     dark = _ink_mask(image, spec)
 
-    # GROW: an off-aspect bbox may have MISSED part of the label (e.g. a
-    # rotated address block along one side).  If ink continues directly
-    # beyond the deficient edges, grow into it before considering any trim.
-    crop_w = x2 - x1
-    crop_h = y2 - y1
-    long_side = max(crop_w, crop_h)
-    short_side = min(crop_w, crop_h)
-    ratio = long_side / short_side if short_side > 0 else 0
-    if ratio and (ratio < spec.min_ratio or ratio > spec.max_ratio):
-        gx1, gy1, gx2, gy2 = _expand_into_ink(dark, x1, y1, x2, y2, spec)
-        if (gx1, gy1, gx2, gy2) != (x1, y1, x2, y2):
-            logger.info(
-                "Bbox ratio %.2f off-label, grew into adjacent ink: "
-                "(%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d)",
-                ratio, x1, y1, x2, y2, gx1, gy1, gx2, gy2,
-            )
-            x1, y1, x2, y2 = gx1, gy1, gx2, gy2
-
-    # GROW: if the bbox edge slices through ink (e.g. the edge of a
-    # barcode), grow it outward until each edge sits on whitespace.
-    ex1, ey1, ex2, ey2 = _expand_to_whitespace(dark, x1, y1, x2, y2, spec)
-    if (ex1, ey1, ex2, ey2) != (x1, y1, x2, y2):
-        logger.info(
-            "Expanded bbox to whitespace: x %d→%d, y %d→%d, x2 %d→%d, y2 %d→%d",
-            x1, ex1, y1, ey1, x2, ex2, y2, ey2,
-        )
-        x1, y1, x2, y2 = ex1, ey1, ex2, ey2
-
-    # SHED: drop content that does not belong to the label — the ratio cut
-    # (e.g. a return slip below) and gap-separated edge bands (e.g. rotated
-    # sidebar text on Amazon return labels).
-    x1, y1, x2, y2 = crop_geometry.shed_separated_bands(dark, (x1, y1, x2, y2), spec)
-
-    # Single final stage: trim to content, then add the safety margin.
-    x1, y1, x2, y2 = crop_geometry.finish_box(dark, (x1, y1, x2, y2), spec)
+    # Refine the proposal: GROW so no edge slices the label, SHED
+    # gap-separated non-label content, then the single trim+margin FINISH.
+    x1, y1, x2, y2 = crop_geometry.refine_label_box(dark, (x1, y1, x2, y2), spec)
 
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
