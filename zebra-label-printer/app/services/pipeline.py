@@ -142,6 +142,8 @@ async def process_and_print(
                         api_key=settings.anthropic_api_key,
                         model=settings.claude_model,
                         usage_out=usage,
+                        label_size_in=(settings.label_width_inches,
+                                       settings.label_height_inches),
                         dpi=_RENDER_DPI,
                     )
                     _accumulate_usage(usage)
@@ -179,6 +181,8 @@ async def process_and_print(
                         model=settings.claude_model,
                         strict=True,
                         usage_out=usage,
+                        label_size_in=(settings.label_width_inches,
+                                       settings.label_height_inches),
                         dpi=_RENDER_DPI,
                     )
                     _accumulate_usage(usage)
@@ -201,6 +205,8 @@ async def process_and_print(
                         model=settings.claude_model,
                         strict=False,
                         usage_out=usage,
+                        label_size_in=(settings.label_width_inches,
+                                       settings.label_height_inches),
                         dpi=_RENDER_DPI,
                     )
                     _accumulate_usage(usage)
@@ -217,6 +223,8 @@ async def process_and_print(
                 api_key=settings.anthropic_api_key,
                 model=settings.claude_model,
                 usage_out=usage,
+                label_size_in=(settings.label_width_inches,
+                               settings.label_height_inches),
                 dpi=working_dpi,
             )
             _accumulate_usage(usage)

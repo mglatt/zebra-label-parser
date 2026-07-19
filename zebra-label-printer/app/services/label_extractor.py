@@ -161,20 +161,22 @@ def _is_letter_size(width: int, height: int) -> bool:
     return abs(ratio - letter_ratio) < 0.13
 
 
-def _content_fills_label_frame(image: Image.Image) -> bool:
+def _content_fills_label_frame(
+    image: Image.Image, expected_ratio: float = 1.5
+) -> bool:
     """True when the image itself is a bare label.
 
     A carrier-generated label file (e.g. an Amazon "save label" PNG) has
-    4x6 proportions with ink reaching nearly every edge.  Such an image IS
-    the label — cropping it can only lose content, so Vision should be
-    skipped entirely.
+    the configured stock's proportions with ink reaching nearly every
+    edge.  Such an image IS the label — cropping it can only lose content,
+    so Vision should be skipped entirely.
 
-    Guards: the frame must have label proportions, content must span ~85%
-    of the frame, and the image must be mostly white (so a photo of a label
-    on a dark background still goes through Vision cropping).
+    Guards: the frame must be within ±10% of the label ratio, content must
+    span ~85% of the frame, and the image must be mostly white (so a photo
+    of a label on a dark background still goes through Vision cropping).
     """
     ratio = max(image.width, image.height) / min(image.width, image.height)
-    if not (1.35 <= ratio <= 1.65):
+    if not (0.9 * expected_ratio <= ratio <= 1.1 * expected_ratio):
         return False
 
     dark = _ink_mask(image)
@@ -191,27 +193,29 @@ def _content_fills_label_frame(image: Image.Image) -> bool:
     return bool(content_area / dark.size >= 0.85)
 
 
-def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
+def _letter_size_fallback_crop(
+    image: Image.Image, label_size_in: tuple[float, float] = (4.0, 6.0)
+) -> Image.Image:
     """Apply a heuristic crop for a standard letter-size page.
 
-    On a typical USPS/FedEx/UPS full-page PDF, the 4x6" shipping label
-    occupies roughly the upper-left portion:
-    - Width: 4" / 8.5" ≈ 47% of page width
-    - Height: 6" / 11" ≈ 55% of page height
-
-    We use slightly generous bounds to avoid clipping.
+    On a typical USPS/FedEx/UPS full-page PDF, the label occupies the
+    upper-left portion of the page, so crop the configured stock size as a
+    fraction of the 8.5x11" page plus a generous slack margin to avoid
+    clipping (with 4x6 stock: 50% x 58% portrait, 57% wide landscape).
     """
-    # Ensure we're working with portrait orientation
+    label_short = min(label_size_in)
+    label_long = max(label_size_in)
+
     w, h = image.width, image.height
     if w > h:
-        # Landscape — the label is in the left portion
-        crop_w = int(w * 0.57)
+        # Landscape — the label lies rotated in the left portion
+        crop_w = int(w * (label_long + 0.27) / 11.0)
         crop_h = int(h * 0.97)
         cropped = image.crop((0, 0, crop_w, crop_h))
     else:
-        # Portrait — label is in the upper-left
-        crop_w = int(w * 0.50)
-        crop_h = int(h * 0.58)
+        # Portrait — label is in the upper-left; slack avoids clipping
+        crop_w = int(w * (label_short + 0.25) / 8.5)
+        crop_h = int(h * (label_long + 0.38) / 11.0)
         cropped = image.crop((0, 0, crop_w, crop_h))
 
     logger.info(
@@ -312,7 +316,7 @@ async def extract_label_region(
     model: str = "claude-sonnet-4-20250514",
     strict: bool = False,
     usage_out: Optional[dict] = None,
-    expected_ratio: float = 1.5,
+    label_size_in: tuple[float, float] = (4.0, 6.0),
     dpi: Optional[float] = None,
 ) -> Optional[Image.Image]:
     """Use Claude Vision to find and crop the shipping label from an image.
@@ -323,12 +327,13 @@ async def extract_label_region(
     (used during multi-page scanning), returns ``None`` when no label is
     confidently detected — no fallbacks are applied.
 
-    *expected_ratio* is the configured label stock's long/short-side ratio;
-    *dpi* is the working resolution of *image* (defaults to the 300-DPI PDF
-    render resolution the refinement heuristics are tuned in).
+    *label_size_in* is the configured label stock size in inches; *dpi* is
+    the working resolution of *image* (defaults to the 300-DPI PDF render
+    resolution the refinement heuristics are tuned in).
     """
+    label_short, label_long = sorted(label_size_in)
     spec = CropSpec(
-        expected_ratio=expected_ratio,
+        expected_ratio=label_long / label_short if label_short else 1.5,
         dpi=dpi if dpi else _DEFAULT_SPEC.dpi,
     )
     is_letter = _is_letter_size(image.width, image.height)
@@ -340,8 +345,8 @@ async def extract_label_region(
     # The image itself is a bare label (label proportions, content edge to
     # edge): use it whole.  Asking Vision for a bbox here can only lose
     # content — there is nothing to crop away.
-    if _content_fills_label_frame(image):
-        logger.info("Image is already a bare label (content fills 4x6 frame), using full image")
+    if _content_fills_label_frame(image, spec.expected_ratio):
+        logger.info("Image is already a bare label (content fills label frame), using full image")
         return image
 
     if not api_key:
@@ -349,7 +354,7 @@ async def extract_label_region(
         if strict:
             return None
         if is_letter:
-            return _letter_size_fallback_crop(image)
+            return _letter_size_fallback_crop(image, label_size_in)
         return image
 
     try:
@@ -426,7 +431,7 @@ async def extract_label_region(
         # Vision didn't produce a usable crop — fall back to heuristic
         if is_letter:
             logger.info("Falling back to letter-size heuristic crop")
-            return _letter_size_fallback_crop(image)
+            return _letter_size_fallback_crop(image, label_size_in)
 
         return image
 
@@ -436,5 +441,5 @@ async def extract_label_region(
             return None
         if is_letter:
             logger.info("Falling back to letter-size heuristic crop")
-            return _letter_size_fallback_crop(image)
+            return _letter_size_fallback_crop(image, label_size_in)
         return image
