@@ -228,18 +228,6 @@ def _tighten_to_content(
     return crop_geometry.tighten_to_content(image, spec)
 
 
-def _find_clean_line(
-    dark: np.ndarray,
-    target: int,
-    radius: int,
-    span: slice,
-    axis: int,
-    spec: CropSpec = _DEFAULT_SPEC,
-) -> Optional[int]:
-    """Find a whitespace line near *target* (see crop_geometry)."""
-    return crop_geometry.find_clean_line(dark, target, radius, span, axis, spec)
-
-
 def _expand_into_ink(
     dark: np.ndarray,
     x1: int,
@@ -307,21 +295,14 @@ def _validate_and_crop(
 
     dark = _ink_mask(image, spec)
 
-    # Trim bbox toward a 4×6" label aspect ratio (1.5:1) when it is far off —
-    # that usually means the crop includes content outside the label (e.g. a
-    # return-slip barcode below it).  The cut is only applied along a clean
-    # whitespace line; if none exists near the target, the label itself is
-    # probably non-standard (doc-tab labels, etc.) and we keep the full bbox
-    # rather than risk slicing it.
+    # GROW: an off-aspect bbox may have MISSED part of the label (e.g. a
+    # rotated address block along one side).  If ink continues directly
+    # beyond the deficient edges, grow into it before considering any trim.
     crop_w = x2 - x1
     crop_h = y2 - y1
     long_side = max(crop_w, crop_h)
     short_side = min(crop_w, crop_h)
     ratio = long_side / short_side if short_side > 0 else 0
-
-    # An off-aspect bbox may have MISSED part of the label (e.g. a rotated
-    # address block along one side).  If ink continues directly beyond the
-    # deficient edges, grow into it before considering any trim.
     if ratio and (ratio < spec.min_ratio or ratio > spec.max_ratio):
         gx1, gy1, gx2, gy2 = _expand_into_ink(dark, x1, y1, x2, y2, spec)
         if (gx1, gy1, gx2, gy2) != (x1, y1, x2, y2):
@@ -331,50 +312,9 @@ def _validate_and_crop(
                 ratio, x1, y1, x2, y2, gx1, gy1, gx2, gy2,
             )
             x1, y1, x2, y2 = gx1, gy1, gx2, gy2
-            crop_w = x2 - x1
-            crop_h = y2 - y1
-            long_side = max(crop_w, crop_h)
-            short_side = min(crop_w, crop_h)
-            ratio = long_side / short_side if short_side > 0 else 0
 
-    cut: Optional[int] = None
-    if 0 < ratio < spec.min_ratio:
-        # Too square — trim the longer dimension to ~1.5 ratio
-        if crop_w >= crop_h:
-            # Landscape: trim from bottom (return slips are typically below)
-            target = y1 + int(crop_w / spec.expected_ratio)
-            cut = _find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), axis=0, spec=spec)
-            if cut is not None and cut > y1:
-                y2 = cut
-        else:
-            # Portrait: trim from right
-            target = x1 + int(crop_h / spec.expected_ratio)
-            cut = _find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), axis=1, spec=spec)
-            if cut is not None and cut > x1:
-                x2 = cut
-    elif ratio > spec.max_ratio:
-        # Too elongated — trim the longer dimension
-        if crop_w >= crop_h:
-            # Very wide: trim from right
-            target = x1 + int(crop_h * spec.expected_ratio)
-            cut = _find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), axis=1, spec=spec)
-            if cut is not None and cut > x1:
-                x2 = cut
-        else:
-            # Very tall: trim from bottom
-            target = y1 + int(crop_w * spec.expected_ratio)
-            cut = _find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), axis=0, spec=spec)
-            if cut is not None and cut > y1:
-                y2 = cut
-
-    if ratio and (ratio < spec.min_ratio or ratio > spec.max_ratio):
-        if cut is not None:
-            logger.info("Bbox ratio %.2f off-label, trimmed along whitespace at %d", ratio, cut)
-        else:
-            logger.info("Bbox ratio %.2f off-label but no clean cut line — keeping full bbox", ratio)
-
-    # If the bbox edge slices through ink (e.g. the edge of a barcode), grow
-    # it outward until each edge sits on whitespace.
+    # GROW: if the bbox edge slices through ink (e.g. the edge of a
+    # barcode), grow it outward until each edge sits on whitespace.
     ex1, ey1, ex2, ey2 = _expand_to_whitespace(dark, x1, y1, x2, y2, spec)
     if (ex1, ey1, ex2, ey2) != (x1, y1, x2, y2):
         logger.info(
@@ -383,9 +323,10 @@ def _validate_and_crop(
         )
         x1, y1, x2, y2 = ex1, ey1, ex2, ey2
 
-    # Shed extraneous content bands separated from the label by a clean
-    # whitespace gap (e.g. rotated sidebar text on Amazon return labels).
-    x1, y1, x2, y2 = crop_geometry.shed_edge_bands(dark, (x1, y1, x2, y2), spec)
+    # SHED: drop content that does not belong to the label — the ratio cut
+    # (e.g. a return slip below) and gap-separated edge bands (e.g. rotated
+    # sidebar text on Amazon return labels).
+    x1, y1, x2, y2 = crop_geometry.shed_separated_bands(dark, (x1, y1, x2, y2), spec)
 
     # Single final stage: trim to content, then add the safety margin.
     x1, y1, x2, y2 = crop_geometry.finish_box(dark, (x1, y1, x2, y2), spec)

@@ -255,20 +255,89 @@ def trim_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
     return image.crop((x1, y1, x2, y2))
 
 
-def shed_edge_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
-    """Shed content bands separated from the label by a whitespace gap.
+def _ratio_cut(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """Trim an off-aspect box toward the expected label ratio.
 
-    Extraneous content that survived the Vision crop (e.g. rotated
-    "Return Authorization Slip" text alongside an Amazon return label)
-    sits near a box edge, separated from the label by a clean whitespace
-    band.  Scan the outer ``spec.edge_frac`` of each edge for a gap of at
-    least ``spec.min_gap_px`` and drop everything outside it.
+    A box far from label proportions after growing usually still includes
+    content outside the label (e.g. a return-slip barcode below it).  The
+    cut is only applied along a clean whitespace line near the
+    expected-ratio target; if none exists, the label itself is probably
+    non-standard (doc-tab stock, etc.) and the box is kept whole rather
+    than risk slicing it.  Cuts only ever remove from the bottom/right.
+    """
+    x1, y1, x2, y2 = box
+    crop_w = x2 - x1
+    crop_h = y2 - y1
+    long_side = max(crop_w, crop_h)
+    short_side = min(crop_w, crop_h)
+    ratio = long_side / short_side if short_side > 0 else 0
+
+    if not ratio or spec.min_ratio <= ratio <= spec.max_ratio:
+        return box
+
+    cut: Optional[int] = None
+    if ratio < spec.min_ratio:
+        # Too square — trim the longer dimension to the expected ratio
+        if crop_w >= crop_h:
+            # Landscape: trim from bottom (return slips are typically below)
+            target = y1 + int(crop_w / spec.expected_ratio)
+            cut = find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), 0, spec)
+            if cut is not None and cut > y1:
+                y2 = cut
+        else:
+            # Portrait: trim from right
+            target = x1 + int(crop_h / spec.expected_ratio)
+            cut = find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), 1, spec)
+            if cut is not None and cut > x1:
+                x2 = cut
+    else:
+        # Too elongated — trim the longer dimension
+        if crop_w >= crop_h:
+            # Very wide: trim from right
+            target = x1 + int(crop_h * spec.expected_ratio)
+            cut = find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), 1, spec)
+            if cut is not None and cut > x1:
+                x2 = cut
+        else:
+            # Very tall: trim from bottom
+            target = y1 + int(crop_w * spec.expected_ratio)
+            cut = find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), 0, spec)
+            if cut is not None and cut > y1:
+                y2 = cut
+
+    if cut is not None:
+        logger.info("Box ratio %.2f off-label, trimmed along whitespace at %d", ratio, cut)
+    else:
+        logger.info("Box ratio %.2f off-label but no clean cut line — keeping full box", ratio)
+
+    return x1, y1, x2, y2
+
+
+def shed_separated_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """Shed content that does not belong to the label.
+
+    Two gap-respecting trims, both of which refuse to cut through ink:
+
+    1. Ratio cut: when the box is far off the expected label ratio, trim
+       the excess dimension along a clean whitespace line (drops e.g. a
+       return slip below the label).
+    2. Edge bands: content near a box edge separated from the label by a
+       whitespace gap of at least ``spec.min_gap_px`` (e.g. rotated
+       "Return Authorization Slip" sidebar text) is dropped.
 
     The ``spec.ws_frac`` threshold is deliberately strict so
     sparse-but-valid label content like address text is never shed, and
     shedding is skipped entirely when it would remove more than half of
     the box.  Boxes smaller than 200px per side are left alone.
     """
+    x1, y1, x2, y2 = box
+    if x2 - x1 < 200 or y2 - y1 < 200:
+        return box
+    return _edge_bands(mask, _ratio_cut(mask, box, spec), spec)
+
+
+def _edge_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """Drop gap-separated content bands along the box edges (see shed_separated_bands)."""
     bx1, by1, bx2, by2 = box
     w, h = bx2 - bx1, by2 - by1
     if w < 200 or h < 200:
@@ -336,8 +405,8 @@ def shed_edge_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
 
 
 def tighten_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
-    """Image-level wrapper for shed_edge_bands (see that function)."""
-    box = shed_edge_bands(
+    """Image-level wrapper for shed_separated_bands (see that function)."""
+    box = shed_separated_bands(
         ink_mask(image, spec), (0, 0, image.width, image.height), spec
     )
     if box != (0, 0, image.width, image.height):
