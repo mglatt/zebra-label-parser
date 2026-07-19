@@ -383,20 +383,16 @@ def _validate_and_crop(
         )
         x1, y1, x2, y2 = ex1, ey1, ex2, ey2
 
-    # Small safety margin; _trim_whitespace() in the image processor removes
-    # excess whitespace later.
-    x1 = max(0, x1 - spec.margin_px)
-    y1 = max(0, y1 - spec.margin_px)
-    x2 = min(width, x2 + spec.margin_px)
-    y2 = min(height, y2 + spec.margin_px)
+    # Shed extraneous content bands separated from the label by a clean
+    # whitespace gap (e.g. rotated sidebar text on Amazon return labels).
+    x1, y1, x2, y2 = crop_geometry.shed_edge_bands(dark, (x1, y1, x2, y2), spec)
+
+    # Single final stage: trim to content, then add the safety margin.
+    x1, y1, x2, y2 = crop_geometry.finish_box(dark, (x1, y1, x2, y2), spec)
 
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
                 x1, y1, x2, y2, cropped.width, cropped.height, coverage * 100)
-
-    # Tighten the crop by detecting whitespace bands that separate the
-    # actual label content from extraneous text (e.g., rotated sidebar text).
-    cropped = _tighten_to_content(cropped, spec)
 
     return cropped
 

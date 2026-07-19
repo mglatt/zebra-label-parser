@@ -205,38 +205,85 @@ def expand_to_whitespace(dark: np.ndarray, box: Box, spec: CropSpec) -> Box:
     return x1, y1, x2, y2
 
 
-def tighten_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
-    """Tighten a crop by detecting whitespace bands along the edges.
+def content_box(mask: np.ndarray, box: Box) -> Optional[Box]:
+    """Bounding box of the ink inside *box*, or None if it is all white."""
+    x1, y1, x2, y2 = box
+    sub = mask[y1:y2, x1:x2]
+    rows = np.nonzero(sub.any(axis=1))[0]
+    cols = np.nonzero(sub.any(axis=0))[0]
+    if rows.size == 0 or cols.size == 0:
+        return None
+    return (
+        x1 + int(cols[0]),
+        y1 + int(rows[0]),
+        x1 + int(cols[-1]) + 1,
+        y1 + int(rows[-1]) + 1,
+    )
 
-    After the Vision crop, extraneous content separated from the label by
-    a whitespace band may remain (e.g. rotated "Return Authorization Slip"
-    text alongside an Amazon return label).  Scan for predominantly-white
-    columns/rows near the edges and trim them away.
 
-    Only trims when a truly empty whitespace gap exists in the outer
-    ``spec.edge_frac`` of the image.  The ``spec.ws_frac`` threshold is
-    deliberately strict so sparse-but-valid label content like address
-    text is never trimmed.
+def finish_box(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """The single final trim+margin stage.
+
+    Tighten the box to the ink it contains (whitespace-only borders carry
+    no information), then add the safety margin on all sides, clamped to
+    the page.  A box with no ink at all is kept as proposed.
     """
-    h, w = image.height, image.width
+    h, w = mask.shape
+    x1, y1, x2, y2 = content_box(mask, box) or box
+    m = spec.margin_px
+    return max(0, x1 - m), max(0, y1 - m), min(w, x2 + m), min(h, y2 + m)
 
-    # Minimum dimension — don't tighten tiny crops
-    if w < 200 or h < 200:
+
+def trim_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
+    """Trim an image's whitespace borders down to content + margin.
+
+    Image-level companion of finish_box, used to normalize content bounds
+    before rotation/scaling.  Returns the image unchanged when it has no
+    ink or when trimming would remove less than 5% of the area.
+    """
+    mask = ink_mask(image, spec)
+    box = content_box(mask, (0, 0, image.width, image.height))
+    if box is None:
         return image
+    x1, y1, x2, y2 = finish_box(mask, box, spec)
+    if (x2 - x1) * (y2 - y1) / (image.width * image.height) > 0.95:
+        return image
+    logger.info(
+        "Trimmed whitespace: %dx%d -> %dx%d",
+        image.width, image.height, x2 - x1, y2 - y1,
+    )
+    return image.crop((x1, y1, x2, y2))
 
-    dark = ink_mask(image, spec)
 
-    col_dark_frac = dark.mean(axis=0)  # shape (w,)
-    row_dark_frac = dark.mean(axis=1)  # shape (h,)
+def shed_edge_bands(mask: np.ndarray, box: Box, spec: CropSpec) -> Box:
+    """Shed content bands separated from the label by a whitespace gap.
+
+    Extraneous content that survived the Vision crop (e.g. rotated
+    "Return Authorization Slip" text alongside an Amazon return label)
+    sits near a box edge, separated from the label by a clean whitespace
+    band.  Scan the outer ``spec.edge_frac`` of each edge for a gap of at
+    least ``spec.min_gap_px`` and drop everything outside it.
+
+    The ``spec.ws_frac`` threshold is deliberately strict so
+    sparse-but-valid label content like address text is never shed, and
+    shedding is skipped entirely when it would remove more than half of
+    the box.  Boxes smaller than 200px per side are left alone.
+    """
+    bx1, by1, bx2, by2 = box
+    w, h = bx2 - bx1, by2 - by1
+    if w < 200 or h < 200:
+        return box
+
+    sub = mask[by1:by2, bx1:bx2]
+    col_dark_frac = sub.mean(axis=0)  # shape (w,)
+    row_dark_frac = sub.mean(axis=1)  # shape (h,)
     min_band = spec.min_gap_px
 
     def _find_inner_edge(dark_frac: np.ndarray, total: int, from_start: bool) -> int:
-        """Find the inner edge of a whitespace band near one side.
+        """Position of the content side of a whitespace gap near one edge.
 
-        Scans from the given side inward.  If a whitespace band of at
-        least ``min_band`` columns/rows is found, returns the position
-        just past the band (where content starts).  Otherwise returns 0
-        (start) or total (end), meaning no trimming.
+        Returns 0 (start) or total (end) when there is no gap of at least
+        ``min_band`` lines, meaning nothing to shed on that side.
         """
         limit = int(total * spec.edge_frac)
         if from_start:
@@ -255,14 +302,11 @@ def tighten_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
             else:
                 if band_len >= min_band:
                     # Found a real gap — return the content side of it
-                    if from_start:
-                        return i  # first content column/row after the gap
-                    else:
-                        return i + 1  # content ends here
+                    return i if from_start else i + 1
                 band_start = None
                 band_len = 0
 
-        # Check if band extends to the edge
+        # A band extending to the scan limit sheds only the band itself
         if band_len >= min_band:
             if from_start:
                 return band_start + band_len
@@ -276,19 +320,26 @@ def tighten_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
     new_y1 = _find_inner_edge(row_dark_frac, h, from_start=True)
     new_y2 = _find_inner_edge(row_dark_frac, h, from_start=False)
 
-    # Only apply if we're actually trimming something meaningful
-    trimmed_w = new_x2 - new_x1
-    trimmed_h = new_y2 - new_y1
-    if trimmed_w < w * 0.5 or trimmed_h < h * 0.5:
-        # Would remove too much — skip tightening
-        logger.info("Tightening would remove >50%% of crop, skipping")
-        return image
+    # Only apply if the label plausibly remains — never shed most of the box
+    if (new_x2 - new_x1) < w * 0.5 or (new_y2 - new_y1) < h * 0.5:
+        logger.info("Shedding would remove >50%% of box, skipping")
+        return box
 
     if new_x1 > 0 or new_x2 < w or new_y1 > 0 or new_y2 < h:
         logger.info(
-            "Tightened crop: x %d→%d, y %d→%d (was %dx%d, now %dx%d)",
-            new_x1, new_x2, new_y1, new_y2, w, h, trimmed_w, trimmed_h,
+            "Shed edge bands: x %d→%d, y %d→%d (of %dx%d)",
+            new_x1, new_x2, new_y1, new_y2, w, h,
         )
-        return image.crop((new_x1, new_y1, new_x2, new_y2))
+        return bx1 + new_x1, by1 + new_y1, bx1 + new_x2, by1 + new_y2
 
+    return box
+
+
+def tighten_to_content(image: Image.Image, spec: CropSpec) -> Image.Image:
+    """Image-level wrapper for shed_edge_bands (see that function)."""
+    box = shed_edge_bands(
+        ink_mask(image, spec), (0, 0, image.width, image.height), spec
+    )
+    if box != (0, 0, image.width, image.height):
+        return image.crop(box)
     return image

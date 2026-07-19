@@ -19,12 +19,14 @@ def _ink(img) -> int:
 
 
 # (scenario, expected width, expected height, expected ink count)
+# Crops are content bounds + the 20px safety margin on every side (since
+# the finish_box refactor made the margin survive to the final crop).
 BBOX_EXPECTED = [
-    (syn.ups_rotated_address_page, 1800, 1200, 2_112_000),
-    (syn.label_with_return_slip_below, 1900, 1250, 2_375_000),
-    (syn.dense_doctab_label, 2000, 1600, 3_200_000),
-    (syn.barcode_clipped_bbox, 600, 850, 498_000),
-    (syn.elongated_strip_bbox, 1800, 1200, 2_160_000),
+    (syn.ups_rotated_address_page, 1840, 1240, 2_112_000),
+    (syn.label_with_return_slip_below, 1940, 1290, 2_375_000),
+    (syn.dense_doctab_label, 2040, 1640, 3_200_000),
+    (syn.barcode_clipped_bbox, 640, 890, 498_000),
+    (syn.elongated_strip_bbox, 1840, 1240, 2_160_000),
 ]
 
 CROP_EXPECTED = [

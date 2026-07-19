@@ -5,40 +5,21 @@ import logging
 
 from PIL import Image
 
+from app.services import crop_geometry
+from app.services.crop_geometry import CropSpec
+
 logger = logging.getLogger(__name__)
 
+_DEFAULT_SPEC = CropSpec()
 
-def _trim_whitespace(
-    img: Image.Image, margin: int = 10, threshold: int = 245
-) -> Image.Image:
-    """Remove white/near-white borders so content dimensions are accurate.
 
-    Converts to grayscale, treats pixels darker than *threshold* as content,
-    and crops to the bounding box of that content plus *margin* pixels on
-    each side.  Returns the original image unchanged when it is entirely
-    white or when trimming would remove less than 5 % of the area.
+def _trim_whitespace(img: Image.Image) -> Image.Image:
+    """Remove whitespace borders so content dimensions are accurate.
+
+    Delegates to the shared trim stage in crop_geometry (same ink
+    threshold and margin as the crop pipeline).
     """
-    gray = img.convert("L")
-    binary = gray.point(lambda p: 255 if p < threshold else 0)
-    bbox = binary.getbbox()
-    if bbox is None:
-        return img  # entirely white / near-white
-
-    x1, y1, x2, y2 = bbox
-    x1 = max(0, x1 - margin)
-    y1 = max(0, y1 - margin)
-    x2 = min(img.width, x2 + margin)
-    y2 = min(img.height, y2 + margin)
-
-    trimmed_area = (x2 - x1) * (y2 - y1)
-    if trimmed_area / (img.width * img.height) > 0.95:
-        return img  # almost no whitespace to remove
-
-    logger.info(
-        "Trimmed whitespace: %dx%d -> %dx%d",
-        img.width, img.height, x2 - x1, y2 - y1,
-    )
-    return img.crop((x1, y1, x2, y2))
+    return crop_geometry.trim_to_content(img, _DEFAULT_SPEC)
 
 
 def prepare_label_image(
