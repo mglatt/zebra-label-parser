@@ -8,6 +8,9 @@ import numpy as np
 from app.services.label_extractor import (
     extract_label_region,
     _content_fills_label_frame,
+    _expand_to_whitespace,
+    _is_letter_size,
+    _letter_size_fallback_crop,
     _parse_bbox,
     _tighten_to_content,
     _validate_and_crop,
@@ -373,6 +376,69 @@ def test_validate_and_crop_recovers_from_elongated_strip():
     result = _validate_and_crop({"x1": 300, "y1": 1500, "x2": 2100, "y2": 2000}, img)
     assert result is not None
     assert result.height >= 1190, f"Label body not recovered: height {result.height}"
+
+
+# --- _is_letter_size tests ---
+
+
+def test_is_letter_size_portrait_and_landscape():
+    assert _is_letter_size(2550, 3300) is True  # 300 DPI letter
+    assert _is_letter_size(3300, 2550) is True  # rotated
+
+
+def test_is_letter_size_rejects_other_shapes():
+    assert _is_letter_size(1000, 1000) is False  # square
+    assert _is_letter_size(1800, 1200) is False  # 4x6 label ratio
+    assert _is_letter_size(1000, 1163) is False  # just below tolerance
+    assert _is_letter_size(1000, 1425) is False  # just above tolerance
+
+
+def test_is_letter_size_within_tolerance():
+    assert _is_letter_size(1000, 1294) is True  # exact letter ratio
+
+
+# --- _letter_size_fallback_crop tests ---
+
+
+def test_letter_fallback_crop_portrait():
+    """Portrait letter page: label assumed in the upper-left 50% x 58%."""
+    img = Image.new("RGB", (2550, 3300))
+    result = _letter_size_fallback_crop(img)
+    assert result.size == (int(2550 * 0.50), int(3300 * 0.58))
+
+
+def test_letter_fallback_crop_landscape():
+    """Landscape letter page: label assumed in the left 57% x 97%."""
+    img = Image.new("RGB", (3300, 2550))
+    result = _letter_size_fallback_crop(img)
+    assert result.size == (int(3300 * 0.57), int(2550 * 0.97))
+
+
+# --- _expand_to_whitespace tests ---
+
+
+def test_expand_to_whitespace_grows_edge_off_ink():
+    """An edge slicing through ink is pushed out to the nearest clean line."""
+    arr = np.full((1000, 1000), 255, dtype=np.uint8)
+    arr[300:700, 300:700] = 0
+    dark = arr < 200
+
+    x1, y1, x2, y2 = _expand_to_whitespace(dark, 300, 300, 700, 650)
+    assert y2 >= 700, f"Edge still slices ink: y2={y2}"
+    # Flush edges step out one line to whitespace; none may move inward
+    assert x1 <= 300 and y1 <= 300 and x2 >= 700
+    assert x1 >= 295 and y1 >= 295 and x2 <= 705
+
+
+def test_expand_to_whitespace_growth_is_capped():
+    """Growth stops at ~8% of the page even if the edge is still on ink."""
+    arr = np.full((1000, 1000), 255, dtype=np.uint8)
+    arr[300:900, 300:700] = 0
+    dark = arr < 200
+
+    _, _, _, y2 = _expand_to_whitespace(dark, 300, 300, 700, 650)
+    max_dy = max(40, int(1000 * 0.08))
+    assert y2 <= 650 + max_dy, f"Growth exceeded cap: y2={y2}"
 
 
 # --- extract_label_region tests ---
