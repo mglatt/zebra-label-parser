@@ -75,6 +75,27 @@ _DARK_THRESH = 200
 # A row/column is "clean" (whitespace) when fewer than this fraction of its
 # pixels are dark.
 _CLEAN_FRAC = 0.004
+# Expected label aspect ratio (long/short side): 4x6" stock = 1.5.  Bboxes
+# outside [_MIN_RATIO, _MAX_RATIO] get repaired (grown or trimmed).
+_EXPECTED_RATIO = 1.5
+_MIN_RATIO = 1.3
+_MAX_RATIO = 2.2
+# Safety margin (px) added around the final bbox.
+_MARGIN = 20
+# Tightening: a column/row is whitespace below this dark fraction.  Very
+# strict (stricter than _CLEAN_FRAC) so sparse-but-valid content like
+# address text is never mistaken for whitespace.
+_WS_FRAC = 0.003
+# Minimum width (px) of a whitespace band to count as a genuine gap rather
+# than normal spacing between characters or lines.
+_MIN_BAND = 20
+# Tightening only inspects this outer fraction of each edge.
+_EDGE_FRAC = 0.15
+
+
+def _ink_mask(image: Image.Image) -> np.ndarray:
+    """Boolean array (h, w): True where a pixel is dark enough to be ink."""
+    return np.array(image.convert("L")) < _DARK_THRESH
 
 
 def _image_to_base64(image: Image.Image) -> str:
@@ -172,7 +193,7 @@ def _content_fills_label_frame(image: Image.Image) -> bool:
     if not (1.35 <= ratio <= 1.65):
         return False
 
-    dark = np.array(image.convert("L")) < _DARK_THRESH
+    dark = _ink_mask(image)
     if dark.mean() > 0.4:
         return False  # dark background — not a printed label file
 
@@ -230,27 +251,13 @@ def _tighten_to_content(image: Image.Image) -> Image.Image:
     deliberately strict to avoid trimming sparse-but-valid label content
     like address text.
     """
-    arr = np.array(image.convert("L"))
-    h, w = arr.shape
+    h, w = image.height, image.width
 
     # Minimum dimension — don't tighten tiny crops
     if w < 200 or h < 200:
         return image
 
-    # Threshold: pixels below this are "dark" (ink)
-    _DARK_THRESH = 200
-    # A column/row is "whitespace" if fewer than this fraction of pixels are dark.
-    # Very strict: 0.3% — only truly empty columns/rows qualify.  Even a single
-    # character of address text pushes a column above this threshold.
-    _WS_FRAC = 0.003
-    # Minimum width of a whitespace band to count as a real gap (pixels).
-    # Must be wide enough to represent a genuine separation, not just normal
-    # spacing between text characters or lines.
-    _MIN_BAND = 20
-    # Only look in the outer portion of each edge
-    _EDGE_FRAC = 0.15
-
-    dark = arr < _DARK_THRESH  # boolean array: True where ink exists
+    dark = _ink_mask(image)
 
     # Column-wise dark pixel fraction
     col_dark_frac = dark.mean(axis=0)  # shape (w,)
@@ -480,7 +487,7 @@ def _validate_and_crop(
         logger.info("Bbox covers %.1f%% of image, using full frame", coverage * 100)
         return image
 
-    dark = np.array(image.convert("L")) < _DARK_THRESH
+    dark = _ink_mask(image)
 
     # Trim bbox toward a 4×6" label aspect ratio (1.5:1) when it is far off —
     # that usually means the crop includes content outside the label (e.g. a
@@ -493,10 +500,6 @@ def _validate_and_crop(
     long_side = max(crop_w, crop_h)
     short_side = min(crop_w, crop_h)
     ratio = long_side / short_side if short_side > 0 else 0
-
-    _EXPECTED_RATIO = 1.5  # 4×6 label
-    _MIN_RATIO = 1.3
-    _MAX_RATIO = 2.2
 
     # An off-aspect bbox may have MISSED part of the label (e.g. a rotated
     # address block along one side).  If ink continues directly beyond the
@@ -564,7 +567,6 @@ def _validate_and_crop(
 
     # Small safety margin; _trim_whitespace() in the image processor removes
     # excess whitespace later.
-    _MARGIN = 20
     x1 = max(0, x1 - _MARGIN)
     y1 = max(0, y1 - _MARGIN)
     x2 = min(width, x2 + _MARGIN)
