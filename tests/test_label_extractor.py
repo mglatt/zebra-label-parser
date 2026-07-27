@@ -8,6 +8,9 @@ import numpy as np
 from app.services.label_extractor import (
     extract_label_region,
     _content_fills_label_frame,
+    _expand_to_whitespace,
+    _is_letter_size,
+    _letter_size_fallback_crop,
     _parse_bbox,
     _tighten_to_content,
     _validate_and_crop,
@@ -375,6 +378,75 @@ def test_validate_and_crop_recovers_from_elongated_strip():
     assert result.height >= 1190, f"Label body not recovered: height {result.height}"
 
 
+# --- _is_letter_size tests ---
+
+
+def test_is_letter_size_portrait_and_landscape():
+    assert _is_letter_size(2550, 3300) is True  # 300 DPI letter
+    assert _is_letter_size(3300, 2550) is True  # rotated
+
+
+def test_is_letter_size_rejects_other_shapes():
+    assert _is_letter_size(1000, 1000) is False  # square
+    assert _is_letter_size(1800, 1200) is False  # 4x6 label ratio
+    assert _is_letter_size(1000, 1163) is False  # just below tolerance
+    assert _is_letter_size(1000, 1425) is False  # just above tolerance
+
+
+def test_is_letter_size_within_tolerance():
+    assert _is_letter_size(1000, 1294) is True  # exact letter ratio
+
+
+# --- _letter_size_fallback_crop tests ---
+
+
+def test_letter_fallback_crop_portrait():
+    """Portrait letter page: label + slack in the upper-left (50% x 58%)."""
+    img = Image.new("RGB", (2550, 3300))
+    result = _letter_size_fallback_crop(img)
+    assert result.size == (
+        int(2550 * 4.25 / 8.5),   # = 50% of page width
+        int(3300 * 6.38 / 11.0),  # = 58% of page height
+    )
+
+
+def test_letter_fallback_crop_landscape():
+    """Landscape letter page: rotated label + slack in the left 57%."""
+    img = Image.new("RGB", (3300, 2550))
+    result = _letter_size_fallback_crop(img)
+    assert result.size == (
+        int(3300 * 6.27 / 11.0),  # = 57% of page width
+        int(2550 * 0.97),
+    )
+
+
+# --- _expand_to_whitespace tests ---
+
+
+def test_expand_to_whitespace_grows_edge_off_ink():
+    """An edge slicing through ink is pushed out to the nearest clean line."""
+    arr = np.full((1000, 1000), 255, dtype=np.uint8)
+    arr[300:700, 300:700] = 0
+    dark = arr < 200
+
+    x1, y1, x2, y2 = _expand_to_whitespace(dark, 300, 300, 700, 650)
+    assert y2 >= 700, f"Edge still slices ink: y2={y2}"
+    # Flush edges step out one line to whitespace; none may move inward
+    assert x1 <= 300 and y1 <= 300 and x2 >= 700
+    assert x1 >= 295 and y1 >= 295 and x2 <= 705
+
+
+def test_expand_to_whitespace_growth_is_capped():
+    """Growth stops at ~8% of the page even if the edge is still on ink."""
+    arr = np.full((1000, 1000), 255, dtype=np.uint8)
+    arr[300:900, 300:700] = 0
+    dark = arr < 200
+
+    _, _, _, y2 = _expand_to_whitespace(dark, 300, 300, 700, 650)
+    max_dy = max(40, int(1000 * 0.08))
+    assert y2 <= 650 + max_dy, f"Growth exceeded cap: y2={y2}"
+
+
 # --- extract_label_region tests ---
 
 
@@ -516,3 +588,36 @@ async def test_extract_strict_valid_bbox_returns_crop(sample_image):
         result = await extract_label_region(sample_image, api_key="test-key", strict=True)
         assert result is not None
         assert result.width < sample_image.width  # was cropped
+
+
+# --- config-derived ratios (non-4x6 stock) ---
+
+
+def test_ratio_windows_derive_from_label_size():
+    """The repair window scales with the configured stock's aspect ratio."""
+    from app.services.crop_geometry import CropSpec
+
+    default = CropSpec()  # 4x6
+    assert default.min_ratio == pytest.approx(1.3)
+    assert default.max_ratio == pytest.approx(2.2)
+
+    doctab = CropSpec(expected_ratio=8.0 / 4.0)  # 4x8 doc-tab stock
+    assert doctab.min_ratio == pytest.approx(2.0 * 1.3 / 1.5)
+    assert doctab.max_ratio == pytest.approx(2.0 * 2.2 / 1.5)
+
+
+def test_content_fills_label_frame_respects_stock_ratio():
+    """A 4x6-proportioned bare label is NOT a bare 4x8 label."""
+    img = _bare_label_image()  # 1800x1200, ratio 1.5
+    assert _content_fills_label_frame(img, expected_ratio=1.5) is True
+    assert _content_fills_label_frame(img, expected_ratio=2.0) is False
+
+
+def test_letter_fallback_crop_scales_with_label_size():
+    """Fallback page fractions derive from the configured stock size."""
+    img = Image.new("RGB", (2550, 3300))
+    result = _letter_size_fallback_crop(img, label_size_in=(4.0, 8.0))
+    assert result.size == (
+        int(2550 * 4.25 / 8.5),
+        int(3300 * 8.38 / 11.0),
+    )

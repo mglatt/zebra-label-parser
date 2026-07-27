@@ -1,4 +1,12 @@
-"""Use Claude Vision API to identify and extract shipping labels from images."""
+"""Use Claude Vision API to identify and extract shipping labels from images.
+
+Contract: the Vision prompt owns SEMANTICS — deciding what is and is not
+part of the label (include rotated address blocks, exclude return slips
+and sidebar headings).  The geometric refinement of the returned bbox
+(grow / shed / finish) lives in crop_geometry, which owns SAFETY and
+never cuts through ink.  Keep carrier-specific knowledge in the prompt;
+keep geometry carrier-agnostic.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +18,9 @@ from typing import Optional
 
 import numpy as np
 from PIL import Image
+
+from app.services import crop_geometry
+from app.services.crop_geometry import CropSpec
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +81,13 @@ packing slip, or receipt with no carrier label), return:
 
 Return ONLY valid JSON, no other text."""
 
-# Pixels darker than this grayscale value count as ink.
-_DARK_THRESH = 200
-# A row/column is "clean" (whitespace) when fewer than this fraction of its
-# pixels are dark.
-_CLEAN_FRAC = 0.004
+# Default refinement parameters — see CropSpec for the tunables.
+_DEFAULT_SPEC = CropSpec()
+
+
+def _ink_mask(image: Image.Image, spec: CropSpec = _DEFAULT_SPEC) -> np.ndarray:
+    """Boolean array (h, w): True where a pixel is dark enough to be ink."""
+    return crop_geometry.ink_mask(image, spec)
 
 
 def _image_to_base64(image: Image.Image) -> str:
@@ -156,23 +169,25 @@ def _is_letter_size(width: int, height: int) -> bool:
     return abs(ratio - letter_ratio) < 0.13
 
 
-def _content_fills_label_frame(image: Image.Image) -> bool:
+def _content_fills_label_frame(
+    image: Image.Image, expected_ratio: float = 1.5
+) -> bool:
     """True when the image itself is a bare label.
 
     A carrier-generated label file (e.g. an Amazon "save label" PNG) has
-    4x6 proportions with ink reaching nearly every edge.  Such an image IS
-    the label — cropping it can only lose content, so Vision should be
-    skipped entirely.
+    the configured stock's proportions with ink reaching nearly every
+    edge.  Such an image IS the label — cropping it can only lose content,
+    so Vision should be skipped entirely.
 
-    Guards: the frame must have label proportions, content must span ~85%
-    of the frame, and the image must be mostly white (so a photo of a label
-    on a dark background still goes through Vision cropping).
+    Guards: the frame must be within ±10% of the label ratio, content must
+    span ~85% of the frame, and the image must be mostly white (so a photo
+    of a label on a dark background still goes through Vision cropping).
     """
     ratio = max(image.width, image.height) / min(image.width, image.height)
-    if not (1.35 <= ratio <= 1.65):
+    if not (0.9 * expected_ratio <= ratio <= 1.1 * expected_ratio):
         return False
 
-    dark = np.array(image.convert("L")) < _DARK_THRESH
+    dark = _ink_mask(image)
     if dark.mean() > 0.4:
         return False  # dark background — not a printed label file
 
@@ -186,27 +201,29 @@ def _content_fills_label_frame(image: Image.Image) -> bool:
     return bool(content_area / dark.size >= 0.85)
 
 
-def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
+def _letter_size_fallback_crop(
+    image: Image.Image, label_size_in: tuple[float, float] = (4.0, 6.0)
+) -> Image.Image:
     """Apply a heuristic crop for a standard letter-size page.
 
-    On a typical USPS/FedEx/UPS full-page PDF, the 4x6" shipping label
-    occupies roughly the upper-left portion:
-    - Width: 4" / 8.5" ≈ 47% of page width
-    - Height: 6" / 11" ≈ 55% of page height
-
-    We use slightly generous bounds to avoid clipping.
+    On a typical USPS/FedEx/UPS full-page PDF, the label occupies the
+    upper-left portion of the page, so crop the configured stock size as a
+    fraction of the 8.5x11" page plus a generous slack margin to avoid
+    clipping (with 4x6 stock: 50% x 58% portrait, 57% wide landscape).
     """
-    # Ensure we're working with portrait orientation
+    label_short = min(label_size_in)
+    label_long = max(label_size_in)
+
     w, h = image.width, image.height
     if w > h:
-        # Landscape — the label is in the left portion
-        crop_w = int(w * 0.57)
+        # Landscape — the label lies rotated in the left portion
+        crop_w = int(w * (label_long + 0.27) / 11.0)
         crop_h = int(h * 0.97)
         cropped = image.crop((0, 0, crop_w, crop_h))
     else:
-        # Portrait — label is in the upper-left
-        crop_w = int(w * 0.50)
-        crop_h = int(h * 0.58)
+        # Portrait — label is in the upper-left; slack avoids clipping
+        crop_w = int(w * (label_short + 0.25) / 8.5)
+        crop_h = int(h * (label_long + 0.38) / 11.0)
         cropped = image.crop((0, 0, crop_w, crop_h))
 
     logger.info(
@@ -216,231 +233,39 @@ def _letter_size_fallback_crop(image: Image.Image) -> Image.Image:
     return cropped
 
 
-def _tighten_to_content(image: Image.Image) -> Image.Image:
-    """Tighten a crop by detecting whitespace bands along the edges.
-
-    After the Vision API crops a region, there may still be extraneous
-    content separated from the actual label by a whitespace band (e.g.,
-    rotated "Return Authorization Slip" text alongside an Amazon return
-    label).  This function scans for predominantly-white columns/rows
-    near the edges and trims them away.
-
-    Only trims if a clear, truly empty whitespace gap is found in the
-    outer portion of the image (outer 15% on each side).  Thresholds are
-    deliberately strict to avoid trimming sparse-but-valid label content
-    like address text.
-    """
-    arr = np.array(image.convert("L"))
-    h, w = arr.shape
-
-    # Minimum dimension — don't tighten tiny crops
-    if w < 200 or h < 200:
-        return image
-
-    # Threshold: pixels below this are "dark" (ink)
-    _DARK_THRESH = 200
-    # A column/row is "whitespace" if fewer than this fraction of pixels are dark.
-    # Very strict: 0.3% — only truly empty columns/rows qualify.  Even a single
-    # character of address text pushes a column above this threshold.
-    _WS_FRAC = 0.003
-    # Minimum width of a whitespace band to count as a real gap (pixels).
-    # Must be wide enough to represent a genuine separation, not just normal
-    # spacing between text characters or lines.
-    _MIN_BAND = 20
-    # Only look in the outer portion of each edge
-    _EDGE_FRAC = 0.15
-
-    dark = arr < _DARK_THRESH  # boolean array: True where ink exists
-
-    # Column-wise dark pixel fraction
-    col_dark_frac = dark.mean(axis=0)  # shape (w,)
-    # Row-wise dark pixel fraction
-    row_dark_frac = dark.mean(axis=1)  # shape (h,)
-
-    def _find_inner_edge(dark_frac: np.ndarray, total: int, from_start: bool) -> int:
-        """Find the inner edge of a whitespace band near one side.
-
-        Scans from the given side inward.  If a whitespace band of at
-        least _MIN_BAND columns/rows is found, returns the position just
-        past the band (where content starts).  Otherwise returns 0 (start)
-        or total (end), meaning no trimming.
-        """
-        limit = int(total * _EDGE_FRAC)
-        if from_start:
-            indices = range(limit)
-        else:
-            indices = range(total - 1, total - 1 - limit, -1)
-
-        band_start = None
-        band_len = 0
-
-        for i in indices:
-            if dark_frac[i] < _WS_FRAC:
-                if band_start is None:
-                    band_start = i
-                band_len += 1
-            else:
-                if band_len >= _MIN_BAND:
-                    # Found a real gap — return the content side of it
-                    if from_start:
-                        return i  # first content column/row after the gap
-                    else:
-                        return i + 1  # content ends here (exclusive not needed, +1 to include)
-                band_start = None
-                band_len = 0
-
-        # Check if band extends to the edge
-        if band_len >= _MIN_BAND:
-            if from_start:
-                return band_start + band_len
-            else:
-                return band_start - band_len + 1 if band_start is not None else total
-
-        return 0 if from_start else total
-
-    new_x1 = _find_inner_edge(col_dark_frac, w, from_start=True)
-    new_x2 = _find_inner_edge(col_dark_frac, w, from_start=False)
-    new_y1 = _find_inner_edge(row_dark_frac, h, from_start=True)
-    new_y2 = _find_inner_edge(row_dark_frac, h, from_start=False)
-
-    # Only apply if we're actually trimming something meaningful
-    trimmed_w = new_x2 - new_x1
-    trimmed_h = new_y2 - new_y1
-    if trimmed_w < w * 0.5 or trimmed_h < h * 0.5:
-        # Would remove too much — skip tightening
-        logger.info("Tightening would remove >50%% of crop, skipping")
-        return image
-
-    if new_x1 > 0 or new_x2 < w or new_y1 > 0 or new_y2 < h:
-        logger.info(
-            "Tightened crop: x %d→%d, y %d→%d (was %dx%d, now %dx%d)",
-            new_x1, new_x2, new_y1, new_y2, w, h, trimmed_w, trimmed_h,
-        )
-        return image.crop((new_x1, new_y1, new_x2, new_y2))
-
-    return image
-
-
-def _find_clean_line(
-    dark: np.ndarray, target: int, radius: int, span: slice, axis: int
-) -> Optional[int]:
-    """Find a whitespace row (axis=0) or column (axis=1) near *target*.
-
-    Scans positions in [target-radius, target+radius]; a position qualifies
-    when fewer than _CLEAN_FRAC of its pixels inside *span* are dark.
-    Returns the qualifying position that keeps the most content (largest
-    index — callers only ever trim from the bottom/right), or None when no
-    clean line exists.  Cutting anywhere else would slice through label
-    content, so callers must skip the trim in that case.
-    """
-    n = dark.shape[axis]
-    lo = max(0, target - radius)
-    hi = min(n, target + radius + 1)
-    if hi <= lo:
-        return None
-    if axis == 0:
-        frac = dark[lo:hi, span].mean(axis=1)
-    else:
-        frac = dark[span, lo:hi].mean(axis=0)
-    clean = np.nonzero(frac < _CLEAN_FRAC)[0]
-    if clean.size == 0:
-        return None
-    return lo + int(clean[-1])
+def _tighten_to_content(
+    image: Image.Image, spec: CropSpec = _DEFAULT_SPEC
+) -> Image.Image:
+    """Trim whitespace-separated bands along the crop edges (see crop_geometry)."""
+    return crop_geometry.tighten_to_content(image, spec)
 
 
 def _expand_into_ink(
-    dark: np.ndarray, x1: int, y1: int, x2: int, y2: int
+    dark: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    spec: CropSpec = _DEFAULT_SPEC,
 ) -> tuple[int, int, int, int]:
-    """Repair an off-aspect bbox by growing it into adjacent label content.
-
-    A bbox far from 4x6 proportions usually means one of two things: it
-    includes extra page content (handled by the whitespace cut), or it
-    MISSED part of the label — e.g. an address block printed rotated 90°
-    along one side (UPS/Amazon return labels).  If ink sits directly
-    beyond the deficient dimension's edges, the label continues there:
-    grow the bbox toward the expected 1.5 ratio to recover it.
-    """
-    h, w = dark.shape
-    crop_w, crop_h = x2 - x1, y2 - y1
-    long_side, short_side = max(crop_w, crop_h), min(crop_w, crop_h)
-    ratio = long_side / short_side if short_side > 0 else 0
-    if ratio <= 0:
-        return x1, y1, x2, y2
-
-    if ratio < 1.5:
-        # Too square: the long dimension is deficient — grow it toward 1.5
-        grow_width = crop_w >= crop_h
-        target = int(short_side * 1.5)
-    else:
-        # Too elongated: the short dimension is deficient — grow it toward 1.5
-        grow_width = crop_w < crop_h
-        target = int(long_side / 1.5)
-
-    # A strip column/row counts as ink with >=3 dark pixels (ignore specks)
-    if grow_width:
-        needed = target - (x2 - x1)
-        if needed > 0:
-            lo = max(0, x1 - needed)
-            ink = np.nonzero(dark[y1:y2, lo:x1].sum(axis=0) >= 3)[0]
-            if ink.size:
-                x1 = lo + int(ink[0])
-        needed = target - (x2 - x1)
-        if needed > 0:
-            hi = min(w, x2 + needed)
-            ink = np.nonzero(dark[y1:y2, x2:hi].sum(axis=0) >= 3)[0]
-            if ink.size:
-                x2 = x2 + int(ink[-1]) + 1
-    else:
-        needed = target - (y2 - y1)
-        if needed > 0:
-            lo = max(0, y1 - needed)
-            ink = np.nonzero(dark[lo:y1, x1:x2].sum(axis=1) >= 3)[0]
-            if ink.size:
-                y1 = lo + int(ink[0])
-        needed = target - (y2 - y1)
-        if needed > 0:
-            hi = min(h, y2 + needed)
-            ink = np.nonzero(dark[y2:hi, x1:x2].sum(axis=1) >= 3)[0]
-            if ink.size:
-                y2 = y2 + int(ink[-1]) + 1
-
-    return x1, y1, x2, y2
+    """Grow an off-aspect bbox into adjacent label ink (see crop_geometry)."""
+    return crop_geometry._grow_into_ink(dark, (x1, y1, x2, y2), spec)
 
 
 def _expand_to_whitespace(
-    dark: np.ndarray, x1: int, y1: int, x2: int, y2: int
+    dark: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    spec: CropSpec = _DEFAULT_SPEC,
 ) -> tuple[int, int, int, int]:
-    """Grow the bbox outward until every edge lies on a whitespace line.
-
-    If the Vision bbox slices through ink (most commonly the edge of a
-    barcode), push that edge outward until the boundary row/column is
-    clean, capped at ~8% of the page dimension so adjacent page content
-    is not swallowed wholesale.
-    """
-    h, w = dark.shape
-    max_dx = max(40, int(w * 0.08))
-    max_dy = max(40, int(h * 0.08))
-    lim_x1 = max(0, x1 - max_dx)
-    lim_x2 = min(w, x2 + max_dx)
-    lim_y1 = max(0, y1 - max_dy)
-    lim_y2 = min(h, y2 + max_dy)
-
-    # Two passes: expanding one edge can expose ink on a neighbouring edge.
-    for _ in range(2):
-        while x1 > lim_x1 and dark[y1:y2, x1].mean() >= _CLEAN_FRAC:
-            x1 -= 1
-        while x2 < lim_x2 and dark[y1:y2, x2 - 1].mean() >= _CLEAN_FRAC:
-            x2 += 1
-        while y1 > lim_y1 and dark[y1, x1:x2].mean() >= _CLEAN_FRAC:
-            y1 -= 1
-        while y2 < lim_y2 and dark[y2 - 1, x1:x2].mean() >= _CLEAN_FRAC:
-            y2 += 1
-
-    return x1, y1, x2, y2
+    """Grow the bbox until every edge lies on whitespace (see crop_geometry)."""
+    return crop_geometry._grow_to_whitespace(dark, (x1, y1, x2, y2), spec)
 
 
 def _validate_and_crop(
-    bbox: dict, image: Image.Image
+    bbox: dict, image: Image.Image, spec: CropSpec = _DEFAULT_SPEC
 ) -> Optional[Image.Image]:
     """Validate bbox and return cropped image, or None if invalid.
 
@@ -480,103 +305,15 @@ def _validate_and_crop(
         logger.info("Bbox covers %.1f%% of image, using full frame", coverage * 100)
         return image
 
-    dark = np.array(image.convert("L")) < _DARK_THRESH
+    dark = _ink_mask(image, spec)
 
-    # Trim bbox toward a 4×6" label aspect ratio (1.5:1) when it is far off —
-    # that usually means the crop includes content outside the label (e.g. a
-    # return-slip barcode below it).  The cut is only applied along a clean
-    # whitespace line; if none exists near the target, the label itself is
-    # probably non-standard (doc-tab labels, etc.) and we keep the full bbox
-    # rather than risk slicing it.
-    crop_w = x2 - x1
-    crop_h = y2 - y1
-    long_side = max(crop_w, crop_h)
-    short_side = min(crop_w, crop_h)
-    ratio = long_side / short_side if short_side > 0 else 0
-
-    _EXPECTED_RATIO = 1.5  # 4×6 label
-    _MIN_RATIO = 1.3
-    _MAX_RATIO = 2.2
-
-    # An off-aspect bbox may have MISSED part of the label (e.g. a rotated
-    # address block along one side).  If ink continues directly beyond the
-    # deficient edges, grow into it before considering any trim.
-    if ratio and (ratio < _MIN_RATIO or ratio > _MAX_RATIO):
-        gx1, gy1, gx2, gy2 = _expand_into_ink(dark, x1, y1, x2, y2)
-        if (gx1, gy1, gx2, gy2) != (x1, y1, x2, y2):
-            logger.info(
-                "Bbox ratio %.2f off-label, grew into adjacent ink: "
-                "(%d,%d)-(%d,%d) -> (%d,%d)-(%d,%d)",
-                ratio, x1, y1, x2, y2, gx1, gy1, gx2, gy2,
-            )
-            x1, y1, x2, y2 = gx1, gy1, gx2, gy2
-            crop_w = x2 - x1
-            crop_h = y2 - y1
-            long_side = max(crop_w, crop_h)
-            short_side = min(crop_w, crop_h)
-            ratio = long_side / short_side if short_side > 0 else 0
-
-    cut: Optional[int] = None
-    if 0 < ratio < _MIN_RATIO:
-        # Too square — trim the longer dimension to ~1.5 ratio
-        if crop_w >= crop_h:
-            # Landscape: trim from bottom (return slips are typically below)
-            target = y1 + int(crop_w / _EXPECTED_RATIO)
-            cut = _find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), axis=0)
-            if cut is not None and cut > y1:
-                y2 = cut
-        else:
-            # Portrait: trim from right
-            target = x1 + int(crop_h / _EXPECTED_RATIO)
-            cut = _find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), axis=1)
-            if cut is not None and cut > x1:
-                x2 = cut
-    elif ratio > _MAX_RATIO:
-        # Too elongated — trim the longer dimension
-        if crop_w >= crop_h:
-            # Very wide: trim from right
-            target = x1 + int(crop_h * _EXPECTED_RATIO)
-            cut = _find_clean_line(dark, target, int(crop_w * 0.12), slice(y1, y2), axis=1)
-            if cut is not None and cut > x1:
-                x2 = cut
-        else:
-            # Very tall: trim from bottom
-            target = y1 + int(crop_w * _EXPECTED_RATIO)
-            cut = _find_clean_line(dark, target, int(crop_h * 0.12), slice(x1, x2), axis=0)
-            if cut is not None and cut > y1:
-                y2 = cut
-
-    if ratio and (ratio < _MIN_RATIO or ratio > _MAX_RATIO):
-        if cut is not None:
-            logger.info("Bbox ratio %.2f off-label, trimmed along whitespace at %d", ratio, cut)
-        else:
-            logger.info("Bbox ratio %.2f off-label but no clean cut line — keeping full bbox", ratio)
-
-    # If the bbox edge slices through ink (e.g. the edge of a barcode), grow
-    # it outward until each edge sits on whitespace.
-    ex1, ey1, ex2, ey2 = _expand_to_whitespace(dark, x1, y1, x2, y2)
-    if (ex1, ey1, ex2, ey2) != (x1, y1, x2, y2):
-        logger.info(
-            "Expanded bbox to whitespace: x %d→%d, y %d→%d, x2 %d→%d, y2 %d→%d",
-            x1, ex1, y1, ey1, x2, ex2, y2, ey2,
-        )
-        x1, y1, x2, y2 = ex1, ey1, ex2, ey2
-
-    # Small safety margin; _trim_whitespace() in the image processor removes
-    # excess whitespace later.
-    _MARGIN = 20
-    x1 = max(0, x1 - _MARGIN)
-    y1 = max(0, y1 - _MARGIN)
-    x2 = min(width, x2 + _MARGIN)
-    y2 = min(height, y2 + _MARGIN)
+    # Refine the proposal: GROW so no edge slices the label, SHED
+    # gap-separated non-label content, then the single trim+margin FINISH.
+    x1, y1, x2, y2 = crop_geometry.refine_label_box(dark, (x1, y1, x2, y2), spec)
 
     cropped = image.crop((x1, y1, x2, y2))
     logger.info("Vision crop: (%d,%d)-(%d,%d) = %dx%d (%.1f%% of page)",
                 x1, y1, x2, y2, cropped.width, cropped.height, coverage * 100)
-
-    # Tighten the crop by detecting whitespace bands that separate the
-    # actual label content from extraneous text (e.g., rotated sidebar text).
-    cropped = _tighten_to_content(cropped)
 
     return cropped
 
@@ -587,6 +324,8 @@ async def extract_label_region(
     model: str = "claude-sonnet-4-20250514",
     strict: bool = False,
     usage_out: Optional[dict] = None,
+    label_size_in: tuple[float, float] = (4.0, 6.0),
+    dpi: Optional[float] = None,
 ) -> Optional[Image.Image]:
     """Use Claude Vision to find and crop the shipping label from an image.
 
@@ -595,7 +334,16 @@ async def extract_label_region(
     image so the caller always gets an image.  When *strict* is ``True``
     (used during multi-page scanning), returns ``None`` when no label is
     confidently detected — no fallbacks are applied.
+
+    *label_size_in* is the configured label stock size in inches; *dpi* is
+    the working resolution of *image* (defaults to the 300-DPI PDF render
+    resolution the refinement heuristics are tuned in).
     """
+    label_short, label_long = sorted(label_size_in)
+    spec = CropSpec(
+        expected_ratio=label_long / label_short if label_short else 1.5,
+        dpi=dpi if dpi else _DEFAULT_SPEC.dpi,
+    )
     is_letter = _is_letter_size(image.width, image.height)
     logger.info(
         "Extraction input: %dx%d, letter_size=%s, has_api_key=%s, strict=%s",
@@ -605,8 +353,8 @@ async def extract_label_region(
     # The image itself is a bare label (label proportions, content edge to
     # edge): use it whole.  Asking Vision for a bbox here can only lose
     # content — there is nothing to crop away.
-    if _content_fills_label_frame(image):
-        logger.info("Image is already a bare label (content fills 4x6 frame), using full image")
+    if _content_fills_label_frame(image, spec.expected_ratio):
+        logger.info("Image is already a bare label (content fills label frame), using full image")
         return image
 
     if not api_key:
@@ -614,7 +362,7 @@ async def extract_label_region(
         if strict:
             return None
         if is_letter:
-            return _letter_size_fallback_crop(image)
+            return _letter_size_fallback_crop(image, label_size_in)
         return image
 
     try:
@@ -677,7 +425,7 @@ async def extract_label_region(
             else:
                 logger.info("Parsed bbox: x1=%d y1=%d x2=%d y2=%d",
                             bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"])
-                cropped = _validate_and_crop(bbox, image)
+                cropped = _validate_and_crop(bbox, image, spec)
                 if cropped is not None:
                     return cropped
                 logger.info("Vision bbox rejected by validation")
@@ -691,7 +439,7 @@ async def extract_label_region(
         # Vision didn't produce a usable crop — fall back to heuristic
         if is_letter:
             logger.info("Falling back to letter-size heuristic crop")
-            return _letter_size_fallback_crop(image)
+            return _letter_size_fallback_crop(image, label_size_in)
 
         return image
 
@@ -701,5 +449,5 @@ async def extract_label_region(
             return None
         if is_letter:
             logger.info("Falling back to letter-size heuristic crop")
-            return _letter_size_fallback_crop(image)
+            return _letter_size_fallback_crop(image, label_size_in)
         return image

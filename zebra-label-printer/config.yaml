@@ -22,6 +22,7 @@ options:
   label_width_inches: 4.0
   label_height_inches: 6.0
   label_dpi: 203
+  label_left_offset: 28
 schema:
   api_key: str?
   anthropic_api_key: str?
@@ -31,6 +32,7 @@ schema:
   label_width_inches: float?
   label_height_inches: float?
   label_dpi: int?
+  label_left_offset: int?
 ports:
   8099/tcp: null
 ports_description:

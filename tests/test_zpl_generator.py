@@ -1,6 +1,6 @@
 from PIL import Image
 
-from app.services.zpl_generator import image_to_zpl, image_to_zpl_ascii, _crc16_ccitt
+from app.services.zpl_generator import image_to_zpl, image_to_zpl_ascii, _crc16_ccitt, _image_to_bytes
 
 
 def test_zpl_output_structure(mono_image):
@@ -64,3 +64,23 @@ def test_non_monochrome_raises():
     rgb = Image.new("RGB", (8, 4))
     with pytest.raises(ValueError, match="1-bit"):
         image_to_zpl(rgb)
+
+
+# --- byte-exact golden for the bitmap packer ---
+
+
+def test_image_to_bytes_golden_non_byte_width():
+    """Byte-exact output for a 12x5 (non-multiple-of-8 width) pattern.
+
+    Pins the exact packing semantics (MSB-first, 1=black, partial trailing
+    byte per row) so the packer can be reimplemented and proven identical.
+    """
+    img = Image.new("1", (12, 5), 1)
+    for x, y in [(0, 0), (3, 0), (11, 0), (1, 1), (8, 2), (11, 2),
+                 (5, 3), (0, 4), (10, 4), (11, 4)]:
+        img.putpixel((x, y), 0)
+
+    data, bytes_per_row, total = _image_to_bytes(img)
+    assert bytes_per_row == 2
+    assert total == 10
+    assert data.hex() == "90104000009004008030"
